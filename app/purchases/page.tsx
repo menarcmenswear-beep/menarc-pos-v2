@@ -1,7 +1,7 @@
 'use client';
 import { useState, useEffect } from 'react';
 import { createClient } from '@/lib/supabase/client';
-import { PackagePlus, CheckCircle2, XCircle, Loader2 } from 'lucide-react';
+import { PackagePlus, CheckCircle2, XCircle, Loader2, Search } from 'lucide-react';
 import { Nav } from '@/components/nav';
 import { useStaffRole } from '@/lib/hooks/use-staff-role';
 
@@ -12,6 +12,7 @@ type Toast = { msg: string; type: 'success' | 'error' } | null;
 export default function PurchasesPage() {
   const { userId } = useStaffRole();
   const [entries, setEntries] = useState<any[]>([]);
+  const [searchTerm, setSearchTerm] = useState('');
   const [suppliers, setSuppliers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -86,6 +87,16 @@ export default function PurchasesPage() {
   }
 
   const totalValue = quantity && price ? (parseFloat(quantity) * parseFloat(price)).toFixed(2) : null;
+
+  const filteredEntries = entries.filter((e) => {
+    if (!searchTerm) return true;
+    const term = searchTerm.toLowerCase();
+    return (
+      e.sku?.toLowerCase().includes(term) ||
+      e.product_name?.toLowerCase().includes(term) ||
+      e.suppliers?.name?.toLowerCase().includes(term)
+    );
+  });
 
   return (
     <div className="min-h-screen bg-neutral-950 text-white p-6 md:p-10 font-sans">
@@ -167,18 +178,24 @@ export default function PurchasesPage() {
           </div>
 
           <div className="md:col-span-2 bg-neutral-900 border border-neutral-800 p-6 rounded-xl shadow-lg">
-            <div className="flex justify-between items-center mb-4">
-              <h2 className="font-bold text-base text-neutral-200">Recent Purchase Log</h2>
-              <span className="text-xs text-neutral-500">Last 50 entries</span>
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-3">
+              <div>
+                <h2 className="font-bold text-base text-neutral-200">Recent Purchase Log</h2>
+                <p className="text-xs text-neutral-500">{filteredEntries.length} of {entries.length} shown (last 50 entries)</p>
+              </div>
+              <div className="relative w-full sm:w-56">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-neutral-500 pointer-events-none" size={12} />
+                <input type="text" placeholder="Search SKU or supplier..." className="bg-neutral-950 border border-neutral-700 text-white pl-7 pr-2 py-1.5 rounded text-xs focus:outline-none w-full" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
+              </div>
             </div>
 
             {loading ? (
               <div className="space-y-3 py-1">{[...Array(5)].map((_, i) => <div key={i} className="h-14 bg-neutral-800/50 rounded animate-pulse" />)}</div>
-            ) : entries.length === 0 ? (
-              <p className="text-sm text-neutral-500 py-4">No purchases logged yet.</p>
+            ) : filteredEntries.length === 0 ? (
+              <p className="text-sm text-neutral-500 py-4">{entries.length === 0 ? 'No purchases logged yet.' : 'No entries match your search.'}</p>
             ) : (
               <div className="divide-y divide-neutral-800 max-h-[560px] overflow-y-auto pr-2">
-                {entries.map((e) => (
+                {filteredEntries.map((e) => (
                   <div key={e.id} className="py-3 flex justify-between items-center text-sm">
                     <div>
                       <p className="font-semibold text-neutral-100">{e.sku}</p>

@@ -1,7 +1,7 @@
 'use client';
 import { useState, useEffect, useMemo } from 'react';
 import { createClient } from '@/lib/supabase/client';
-import { Download, RefreshCw, TrendingUp, Package, Receipt, XCircle, Trophy, Wallet } from 'lucide-react';
+import { Download, RefreshCw, TrendingUp, Package, Receipt, XCircle, Trophy, Wallet, Undo2, Search } from 'lucide-react';
 import { Nav } from '@/components/nav';
 
 const supabase = createClient();
@@ -9,24 +9,26 @@ const supabase = createClient();
 export default function Dashboard() {
   const [sales, setSales] = useState<any[]>([]);
   const [items, setItems] = useState<any[]>([]);
+  const [returns, setReturns] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [searchTerm, setSearchTerm] = useState('');
 
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
 
   useEffect(() => {
-    fetchSales();
+    fetchAll();
   }, [startDate, endDate]);
 
-  async function fetchSales() {
+  async function fetchAll() {
     setLoading(true);
 
-    let query = supabase.from('sales').select('*').order('created_at', { ascending: false });
-    if (startDate) query = query.gte('created_at', `${startDate}T00:00:00`);
-    if (endDate) query = query.lte('created_at', `${endDate}T23:59:59`);
-
-    const { data: salesData, error: salesError } = await query;
+    // 1. Sale headers in range
+    let salesQuery = supabase.from('sales').select('*').order('created_at', { ascending: false });
+    if (startDate) salesQuery = salesQuery.gte('created_at', `${startDate}T00:00:00`);
+    if (endDate) salesQuery = salesQuery.lte('created_at', `${endDate}T23:59:59`);
+    const { data: salesData, error: salesError } = await salesQuery;
 
     if (salesError) {
       setError(salesError.message);
@@ -34,27 +36,39 @@ export default function Dashboard() {
       setLoading(false);
       return;
     }
-
     setSales(salesData || []);
 
+    // 2. Line items for those sales
     const saleIds = (salesData || []).map(s => s.id);
-    if (saleIds.length === 0) {
-      setItems([]);
-      setLoading(false);
-      return;
+    let itemsData: any[] = [];
+    if (saleIds.length > 0) {
+      const { data, error: itemsError } = await supabase.from('sale_items').select('*').in('sale_id', saleIds);
+      if (itemsError) {
+        setError(itemsError.message);
+        setTimeout(() => setError(''), 4000);
+      } else {
+        itemsData = data || [];
+      }
     }
+    setItems(itemsData);
 
-    const { data: itemsData, error: itemsError } = await supabase
-      .from('sale_items')
-      .select('*')
-      .in('sale_id', saleIds);
+    // 3. Returns booked within this same date range (by when the return happened,
+    //    not the original sale date — matches standard retail reporting practice)
+    let returnsQuery = supabase
+      .from('returns')
+      .select('*, sale_items(sku, qty, final_value, cost_price)')
+      .order('created_at', { ascending: false });
+    if (startDate) returnsQuery = returnsQuery.gte('created_at', `${startDate}T00:00:00`);
+    if (endDate) returnsQuery = returnsQuery.lte('created_at', `${endDate}T23:59:59`);
+    const { data: returnsData, error: returnsError } = await returnsQuery;
 
-    if (itemsError) {
-      setError(itemsError.message);
+    if (returnsError) {
+      setError(returnsError.message);
       setTimeout(() => setError(''), 4000);
     } else {
-      setItems(itemsData || []);
+      setReturns(returnsData || []);
     }
+
     setLoading(false);
   }
 
@@ -80,12 +94,36 @@ export default function Dashboard() {
     document.body.removeChild(link);
   }
 
-  const totalRevenue = sales.reduce((acc, s) => acc + (s.total || 0), 0);
-  const totalUnits = items.reduce((acc, i) => acc + (i.qty || 0), 0);
-  const totalTransactions = sales.length;
+  // --- Returns-aware figures ---
+  // A return row's own value isn't stored directly — it's derived from its parent
+  // sale_item's per-unit rate (final_value / qty), times the quantity returned.
+  function returnValue(r: any) {
+    const parent = r.sale_items;
+    if (!parent || !parent.qty) return 0;
+    return (parent.final_value / parent.qty) * r.qty;
+  }
+  function returnMarginImpact(r: any) {
+    const parent = r.sale_items;
+    if (!parent || !parent.qty || parent.cost_price == null) return 0;
+    const perUnitValue = parent.final_value / parent.qty;
+    return (perUnitValue - parent.cost_price) * r.qty;
+  }
+
+  const grossRevenue = sales.reduce((acc, s) => acc + (s.total || 0), 0);
+  const grossUnits = items.reduce((acc, i) => acc + (i.qty || 0), 0);
   const itemsWithCost = items.filter(i => i.cost_price != null);
-  const totalMargin = itemsWithCost.reduce((acc, i) => acc + (i.final_value - i.cost_price * i.qty), 0);
+  const grossMargin = itemsWithCost.reduce((acc, i) => acc + (i.final_value - i.cost_price * i.qty), 0);
   const marginCoverage = items.length > 0 ? Math.round((itemsWithCost.length / items.length) * 100) : 0;
+
+  const returnedValue = returns.reduce((acc, r) => acc + returnValue(r), 0);
+  const returnedUnits = returns.reduce((acc, r) => acc + r.qty, 0);
+  const returnedMarginImpact = returns.reduce((acc, r) => acc + returnMarginImpact(r), 0);
+
+  const netRevenue = grossRevenue - returnedValue;
+  const netUnits = grossUnits - returnedUnits;
+  const netMargin = grossMargin - returnedMarginImpact;
+  const totalTransactions = sales.length;
+  const hasReturns = returns.length > 0;
 
   const dailyRevenue = useMemo(() => {
     const map = new Map<string, number>();
@@ -94,10 +132,15 @@ export default function Dashboard() {
       const day = new Date(s.created_at).toISOString().split('T')[0];
       map.set(day, (map.get(day) || 0) + (s.total || 0));
     });
+    returns.forEach(r => {
+      if (!r.created_at) return;
+      const day = new Date(r.created_at).toISOString().split('T')[0];
+      map.set(day, (map.get(day) || 0) - returnValue(r));
+    });
     return Array.from(map.entries()).sort(([a], [b]) => a.localeCompare(b)).slice(-14);
-  }, [sales]);
+  }, [sales, returns]);
 
-  const maxDaily = Math.max(1, ...dailyRevenue.map(([, v]) => v));
+  const maxDaily = Math.max(1, ...dailyRevenue.map(([, v]) => Math.abs(v)));
 
   const topSellers = useMemo(() => {
     const map = new Map<string, { qty: number; revenue: number }>();
@@ -115,6 +158,27 @@ export default function Dashboard() {
     items.forEach(i => map.set(i.sale_id, (map.get(i.sale_id) || 0) + i.qty));
     return map;
   }, [items]);
+
+  const skusBySale = useMemo(() => {
+    const map = new Map<string, string[]>();
+    items.forEach(i => {
+      const arr = map.get(i.sale_id) || [];
+      arr.push(i.sku);
+      map.set(i.sale_id, arr);
+    });
+    return map;
+  }, [items]);
+
+  const filteredSales = sales.filter((s) => {
+    if (!searchTerm) return true;
+    const term = searchTerm.toLowerCase();
+    const skus = skusBySale.get(s.id) || [];
+    return (
+      s.customer_name?.toLowerCase().includes(term) ||
+      s.customer_phone?.includes(term) ||
+      skus.some(sku => sku.toLowerCase().includes(term))
+    );
+  });
 
   return (
     <div className="min-h-screen bg-neutral-950 text-white p-6 md:p-10 font-sans">
@@ -145,43 +209,55 @@ export default function Dashboard() {
           </div>
           <div className="flex gap-2 self-end">
             <button onClick={exportSalesCSV} className="flex items-center gap-1.5 text-xs bg-neutral-800 border border-neutral-700 hover:bg-neutral-700 px-3 py-1.5 rounded transition"><Download size={12} /> Export Range CSV</button>
-            <button onClick={fetchSales} className="flex items-center gap-1.5 text-xs text-neutral-400 hover:text-white border border-neutral-800 px-2.5 py-1.5 rounded transition"><RefreshCw size={12} className={loading ? 'animate-spin' : ''} /> Refresh</button>
+            <button onClick={fetchAll} className="flex items-center gap-1.5 text-xs text-neutral-400 hover:text-white border border-neutral-800 px-2.5 py-1.5 rounded transition"><RefreshCw size={12} className={loading ? 'animate-spin' : ''} /> Refresh</button>
           </div>
         </div>
 
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-6 mb-6">
+        <div className={`grid grid-cols-2 ${hasReturns ? 'md:grid-cols-5' : 'md:grid-cols-4'} gap-4 mb-6`}>
           <div className="bg-neutral-900 border border-neutral-800 p-6 rounded-xl shadow-lg">
-            <p className="flex items-center gap-1.5 text-xs text-neutral-400 uppercase tracking-wider mb-1"><TrendingUp size={12} /> Total Revenue</p>
-            <p className="text-3xl font-black font-mono text-white">₹{totalRevenue.toLocaleString('en-IN')}</p>
+            <p className="flex items-center gap-1.5 text-xs text-neutral-400 uppercase tracking-wider mb-1"><TrendingUp size={12} /> Net Revenue</p>
+            <p className="text-3xl font-black font-mono text-white">₹{netRevenue.toLocaleString('en-IN')}</p>
+            {hasReturns && <p className="text-[10px] text-neutral-600 mt-1">₹{grossRevenue.toLocaleString('en-IN')} gross − ₹{returnedValue.toLocaleString('en-IN')} returns</p>}
           </div>
           <div className="bg-neutral-900 border border-neutral-800 p-6 rounded-xl shadow-lg">
-            <p className="flex items-center gap-1.5 text-xs text-neutral-400 uppercase tracking-wider mb-1"><Wallet size={12} /> Gross Margin</p>
-            <p className="text-3xl font-black font-mono text-emerald-400">₹{totalMargin.toLocaleString('en-IN')}</p>
+            <p className="flex items-center gap-1.5 text-xs text-neutral-400 uppercase tracking-wider mb-1"><Wallet size={12} /> Net Margin</p>
+            <p className="text-3xl font-black font-mono text-emerald-400">₹{netMargin.toLocaleString('en-IN')}</p>
             {itemsWithCost.length < items.length && items.length > 0 && (
               <p className="text-[10px] text-neutral-600 mt-1">{marginCoverage}% of items have a cost price on file</p>
             )}
           </div>
           <div className="bg-neutral-900 border border-neutral-800 p-6 rounded-xl shadow-lg">
-            <p className="flex items-center gap-1.5 text-xs text-neutral-400 uppercase tracking-wider mb-1"><Package size={12} /> Units Sold</p>
-            <p className="text-3xl font-black font-mono text-white">{totalUnits}</p>
+            <p className="flex items-center gap-1.5 text-xs text-neutral-400 uppercase tracking-wider mb-1"><Package size={12} /> Net Units</p>
+            <p className="text-3xl font-black font-mono text-white">{netUnits}</p>
+            {hasReturns && <p className="text-[10px] text-neutral-600 mt-1">{grossUnits} sold − {returnedUnits} returned</p>}
           </div>
           <div className="bg-neutral-900 border border-neutral-800 p-6 rounded-xl shadow-lg">
-            <p className="flex items-center gap-1.5 text-xs text-neutral-400 uppercase tracking-wider mb-1"><Receipt size={12} /> Total Transactions</p>
+            <p className="flex items-center gap-1.5 text-xs text-neutral-400 uppercase tracking-wider mb-1"><Receipt size={12} /> Transactions</p>
             <p className="text-3xl font-black font-mono text-white">{totalTransactions}</p>
           </div>
+          {hasReturns && (
+            <div className="bg-neutral-900 border border-amber-500/20 p-6 rounded-xl shadow-lg">
+              <p className="flex items-center gap-1.5 text-xs text-amber-500/80 uppercase tracking-wider mb-1"><Undo2 size={12} /> Returns</p>
+              <p className="text-3xl font-black font-mono text-amber-400">₹{returnedValue.toLocaleString('en-IN')}</p>
+              <p className="text-[10px] text-neutral-600 mt-1">{returns.length} return{returns.length !== 1 ? 's' : ''} · {returnedUnits} units</p>
+            </div>
+          )}
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
           <div className="md:col-span-2 bg-neutral-900 border border-neutral-800 p-6 rounded-xl shadow-lg">
-            <h2 className="font-bold text-base text-neutral-200 mb-4">Daily Revenue</h2>
+            <h2 className="font-bold text-base text-neutral-200 mb-4">Daily Net Revenue</h2>
             {dailyRevenue.length === 0 ? (
               <p className="text-sm text-neutral-500 py-8 text-center">No revenue data for this range yet.</p>
             ) : (
               <div className="flex items-end gap-1.5 h-40">
                 {dailyRevenue.map(([day, value]) => (
                   <div key={day} className="flex-1 flex flex-col items-center justify-end h-full group relative">
-                    <div className="text-[10px] text-neutral-400 mb-1 opacity-0 group-hover:opacity-100 transition font-mono absolute -top-4">₹{value.toLocaleString('en-IN')}</div>
-                    <div className="w-full bg-white/80 group-hover:bg-white rounded-t transition" style={{ height: `${Math.max(4, (value / maxDaily) * 100)}%` }} />
+                    <div className="text-[10px] text-neutral-400 mb-1 opacity-0 group-hover:opacity-100 transition font-mono absolute -top-4 whitespace-nowrap">₹{value.toLocaleString('en-IN')}</div>
+                    <div
+                      className={`w-full rounded-t transition ${value < 0 ? 'bg-amber-500/70 group-hover:bg-amber-400' : 'bg-white/80 group-hover:bg-white'}`}
+                      style={{ height: `${Math.max(4, (Math.abs(value) / maxDaily) * 100)}%` }}
+                    />
                     <span className="text-[9px] text-neutral-500 mt-1.5">{day.slice(5)}</span>
                   </div>
                 ))}
@@ -213,18 +289,24 @@ export default function Dashboard() {
         </div>
 
         <div className="bg-neutral-900 border border-neutral-800 p-6 rounded-xl shadow-lg">
-          <div className="flex justify-between items-center mb-4">
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-3">
             <h2 className="font-bold text-base text-neutral-200">Sales Transactions History</h2>
-            <span className="text-xs text-neutral-500">{sales.length} Transactions Found</span>
+            <div className="flex items-center gap-3">
+              <span className="text-xs text-neutral-500">{filteredSales.length} of {sales.length}</span>
+              <div className="relative w-full sm:w-56">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-neutral-500 pointer-events-none" size={12} />
+                <input type="text" placeholder="Search customer, phone, SKU..." className="bg-neutral-950 border border-neutral-700 text-white pl-7 pr-2 py-1.5 rounded text-xs focus:outline-none w-full" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
+              </div>
+            </div>
           </div>
 
           {loading ? (
             <div className="space-y-3 py-1">{[...Array(5)].map((_, i) => <div key={i} className="h-14 bg-neutral-800/50 rounded animate-pulse" />)}</div>
-          ) : sales.length === 0 ? (
-            <p className="text-sm text-neutral-500 py-4">No sales recorded for this date range.</p>
+          ) : filteredSales.length === 0 ? (
+            <p className="text-sm text-neutral-500 py-4">{sales.length === 0 ? 'No sales recorded for this date range.' : 'No transactions match your search.'}</p>
           ) : (
             <div className="divide-y divide-neutral-800 max-h-[420px] overflow-y-auto pr-2">
-              {sales.map((sale) => (
+              {filteredSales.map((sale) => (
                 <div key={sale.id} className="py-3.5 flex justify-between items-center text-sm">
                   <div>
                     <p className="font-semibold text-neutral-100">

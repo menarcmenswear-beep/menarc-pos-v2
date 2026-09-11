@@ -1,7 +1,7 @@
 'use client';
 import { useState, useEffect } from 'react';
 import { createClient } from '@/lib/supabase/client';
-import { Search, Download, Pencil, Trash2, X, Check, CheckCircle2, XCircle, PackagePlus, Lock } from 'lucide-react';
+import { Search, Download, Pencil, Trash2, X, Check, CheckCircle2, XCircle, PackagePlus, Lock, ImagePlus, ImageOff, Loader2 } from 'lucide-react';
 import { Nav } from '@/components/nav';
 import { useStaffRole } from '@/lib/hooks/use-staff-role';
 
@@ -30,9 +30,12 @@ export default function InventoryManagement() {
   const [newThreshold, setNewThreshold] = useState('15');
   const [newHsn, setNewHsn] = useState('');
   const [newGst, setNewGst] = useState('0');
+  const [newImageFile, setNewImageFile] = useState<File | null>(null);
+  const [uploadingImage, setUploadingImage] = useState(false);
 
   const [editingSku, setEditingSku] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState<any>({});
+  const [editImageFile, setEditImageFile] = useState<File | null>(null);
   const [confirmDeleteSku, setConfirmDeleteSku] = useState<string | null>(null);
 
   useEffect(() => {
@@ -58,6 +61,18 @@ export default function InventoryManagement() {
     if (data) setSuppliers(data);
   }
 
+  async function uploadProductImage(sku: string, file: File): Promise<string | null> {
+    const ext = file.name.split('.').pop();
+    const path = `${sku}-${Date.now()}.${ext}`;
+    const { error: uploadError } = await supabase.storage.from('product-images').upload(path, file, { upsert: true });
+    if (uploadError) {
+      notify('Image upload failed: ' + uploadError.message, 'error');
+      return null;
+    }
+    const { data } = supabase.storage.from('product-images').getPublicUrl(path);
+    return data.publicUrl;
+  }
+
   async function handleAddProduct(e: React.FormEvent) {
     e.preventDefault();
     if (!newSku || !newPrice || !newQty) {
@@ -65,8 +80,16 @@ export default function InventoryManagement() {
       return;
     }
 
+    const skuValue = newSku.trim().toUpperCase();
+    let imageUrl: string | null = null;
+    if (newImageFile) {
+      setUploadingImage(true);
+      imageUrl = await uploadProductImage(skuValue, newImageFile);
+      setUploadingImage(false);
+    }
+
     const { error } = await supabase.from('inventory').insert({
-      sku: newSku.trim().toUpperCase(),
+      sku: skuValue,
       name: newName.trim(),
       category: newCategory.trim(),
       supplier_id: newSupplierId || null,
@@ -78,6 +101,7 @@ export default function InventoryManagement() {
       low_stock_threshold: newThreshold ? parseInt(newThreshold) : 15,
       hsn_code: newHsn.trim() || null,
       gst_rate: newGst ? parseFloat(newGst) : 0,
+      image_url: imageUrl,
     });
 
     if (error) {
@@ -86,7 +110,7 @@ export default function InventoryManagement() {
       notify('Product added successfully.');
       setNewSku(''); setNewName(''); setNewColor(''); setNewSize('');
       setNewPrice(''); setNewCostPrice(''); setNewQty(''); setNewThreshold('15');
-      setNewSupplierId(''); setNewHsn(''); setNewGst('0');
+      setNewSupplierId(''); setNewHsn(''); setNewGst('0'); setNewImageFile(null);
       fetchInventory();
     }
   }
@@ -100,10 +124,19 @@ export default function InventoryManagement() {
   function startEdit(item: any) {
     setEditingSku(item.sku);
     setEditDraft({ ...item });
+    setEditImageFile(null);
     setConfirmDeleteSku(null);
   }
 
   async function saveEdit() {
+    let imageUrl = editDraft.image_url || null;
+    if (editImageFile) {
+      setUploadingImage(true);
+      const uploaded = await uploadProductImage(editingSku!, editImageFile);
+      setUploadingImage(false);
+      if (uploaded) imageUrl = uploaded;
+    }
+
     const { error } = await supabase
       .from('inventory')
       .update({
@@ -118,6 +151,7 @@ export default function InventoryManagement() {
         low_stock_threshold: editDraft.low_stock_threshold ? parseInt(editDraft.low_stock_threshold) : 15,
         hsn_code: editDraft.hsn_code || null,
         gst_rate: editDraft.gst_rate ? parseFloat(editDraft.gst_rate) : 0,
+        image_url: imageUrl,
       })
       .eq('sku', editingSku);
 
@@ -244,7 +278,17 @@ export default function InventoryManagement() {
                     <input type="number" min="0" step="0.1" placeholder="5" className="bg-neutral-950 border border-neutral-700 rounded p-2 text-sm text-white focus:outline-none focus:border-white w-full" value={newGst} onChange={(e) => setNewGst(e.target.value)} />
                   </div>
                 </div>
-                <button type="submit" className="w-full bg-white text-black font-bold py-2.5 rounded hover:bg-neutral-200 transition text-sm mt-2">Save Product</button>
+                <div>
+                  <label className="text-xs text-neutral-400 block mb-1">Product Photo</label>
+                  <input
+                    type="file" accept="image/*"
+                    onChange={(e) => setNewImageFile(e.target.files?.[0] || null)}
+                    className="text-xs text-neutral-400 w-full file:mr-3 file:py-1.5 file:px-3 file:rounded file:border-0 file:bg-neutral-800 file:text-white file:text-xs hover:file:bg-neutral-700"
+                  />
+                </div>
+                <button type="submit" disabled={uploadingImage} className="w-full flex items-center justify-center gap-2 bg-white text-black font-bold py-2.5 rounded hover:bg-neutral-200 transition text-sm mt-2 disabled:opacity-60">
+                  {uploadingImage ? <><Loader2 size={14} className="animate-spin" /> Uploading photo...</> : 'Save Product'}
+                </button>
               </form>
             </div>
           )}
@@ -303,8 +347,21 @@ export default function InventoryManagement() {
                             {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
                           </select>
                         </div>
+                        <div className="flex items-center gap-3">
+                          {editDraft.image_url && (
+                            /* eslint-disable-next-line @next/next/no-img-element */
+                            <img src={editDraft.image_url} alt="" className="w-10 h-10 object-cover rounded border border-neutral-700" />
+                          )}
+                          <input
+                            type="file" accept="image/*"
+                            onChange={(e) => setEditImageFile(e.target.files?.[0] || null)}
+                            className="text-[11px] text-neutral-400 flex-1 file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:bg-neutral-800 file:text-white file:text-[11px] hover:file:bg-neutral-700"
+                          />
+                        </div>
                         <div className="flex gap-2 pt-1">
-                          <button onClick={saveEdit} className="flex items-center gap-1 text-xs bg-white text-black font-semibold px-3 py-1.5 rounded"><Check size={12} /> Save</button>
+                          <button onClick={saveEdit} disabled={uploadingImage} className="flex items-center gap-1 text-xs bg-white text-black font-semibold px-3 py-1.5 rounded disabled:opacity-60">
+                            {uploadingImage ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />} Save
+                          </button>
                           <button onClick={() => setEditingSku(null)} className="flex items-center gap-1 text-xs bg-neutral-800 px-3 py-1.5 rounded"><X size={12} /> Cancel</button>
                         </div>
                       </div>
@@ -313,17 +370,27 @@ export default function InventoryManagement() {
 
                   return (
                     <div key={item.sku} className="py-3 flex justify-between items-center text-sm gap-2">
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <p className="font-semibold text-neutral-100">{item.sku}</p>
-                          <span className="bg-neutral-800 text-neutral-300 text-[10px] px-1.5 py-0.5 rounded">{item.category || 'General'}</span>
-                          {item.suppliers?.name && <span className="bg-neutral-800/60 text-neutral-400 text-[10px] px-1.5 py-0.5 rounded">{item.suppliers.name}</span>}
-                          {isLowStock && <span className="bg-amber-500/10 text-amber-400 border border-amber-500/30 text-[10px] px-1.5 py-0.5 rounded font-medium">Low Stock</span>}
+                      <div className="flex items-center gap-3 min-w-0">
+                        {item.image_url ? (
+                          /* eslint-disable-next-line @next/next/no-img-element */
+                          <img src={item.image_url} alt={item.sku} className="w-10 h-10 object-cover rounded border border-neutral-800 shrink-0" />
+                        ) : (
+                          <div className="w-10 h-10 rounded border border-neutral-800 bg-neutral-950 flex items-center justify-center shrink-0">
+                            <ImageOff size={14} className="text-neutral-700" />
+                          </div>
+                        )}
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <p className="font-semibold text-neutral-100">{item.sku}</p>
+                            <span className="bg-neutral-800 text-neutral-300 text-[10px] px-1.5 py-0.5 rounded">{item.category || 'General'}</span>
+                            {item.suppliers?.name && <span className="bg-neutral-800/60 text-neutral-400 text-[10px] px-1.5 py-0.5 rounded">{item.suppliers.name}</span>}
+                            {isLowStock && <span className="bg-amber-500/10 text-amber-400 border border-amber-500/30 text-[10px] px-1.5 py-0.5 rounded font-medium">Low Stock</span>}
+                          </div>
+                          <p className="text-xs text-neutral-400 truncate">
+                            {item.name || 'Unnamed'} {item.color ? `• ${item.color}` : ''} {item.size ? `• ${item.size}` : ''} | ₹{item.price}
+                            {isAdmin && margin != null && <span className="text-emerald-400"> · margin ₹{margin.toFixed(0)}</span>}
+                          </p>
                         </div>
-                        <p className="text-xs text-neutral-400 truncate">
-                          {item.name || 'Unnamed'} {item.color ? `• ${item.color}` : ''} {item.size ? `• ${item.size}` : ''} | ₹{item.price}
-                          {isAdmin && margin != null && <span className="text-emerald-400"> · margin ₹{margin.toFixed(0)}</span>}
-                        </p>
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
                         <span className={`font-mono text-sm ${isLowStock ? 'text-amber-400 font-bold' : 'text-neutral-300'}`}>{item.current_quantity} qty</span>

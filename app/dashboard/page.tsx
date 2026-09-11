@@ -1,9 +1,8 @@
 'use client';
 import { useState, useEffect, useMemo } from 'react';
 import { createClient } from '@/lib/supabase/client';
-import Link from 'next/link';
-import { Download, RefreshCw, TrendingUp, Package, Receipt, XCircle, Trophy } from 'lucide-react';
-import { LogoutButton } from '@/components/logout-button';
+import { Download, RefreshCw, TrendingUp, Package, Receipt, XCircle, Trophy, Wallet } from 'lucide-react';
+import { Nav } from '@/components/nav';
 
 const supabase = createClient();
 
@@ -84,6 +83,9 @@ export default function Dashboard() {
   const totalRevenue = sales.reduce((acc, s) => acc + (s.total || 0), 0);
   const totalUnits = items.reduce((acc, i) => acc + (i.qty || 0), 0);
   const totalTransactions = sales.length;
+  const itemsWithCost = items.filter(i => i.cost_price != null);
+  const totalMargin = itemsWithCost.reduce((acc, i) => acc + (i.final_value - i.cost_price * i.qty), 0);
+  const marginCoverage = items.length > 0 ? Math.round((itemsWithCost.length / items.length) * 100) : 0;
 
   const dailyRevenue = useMemo(() => {
     const map = new Map<string, number>();
@@ -123,12 +125,7 @@ export default function Dashboard() {
             <p className="text-xs text-neutral-400">Sales Analytics & Date-Range Reports</p>
           </div>
           <div className="flex items-center gap-2">
-            <nav className="flex items-center gap-2">
-              <Link href="/" className="text-xs text-neutral-400 hover:text-white bg-neutral-900 border border-neutral-800 px-3 py-1.5 rounded transition">POS Checkout</Link>
-              <Link href="/inventory" className="text-xs text-neutral-400 hover:text-white bg-neutral-900 border border-neutral-800 px-3 py-1.5 rounded transition">Inventory</Link>
-              <Link href="/dashboard" className="text-xs text-white bg-neutral-800 border border-neutral-700 px-3 py-1.5 rounded transition">Dashboard</Link>
-            </nav>
-            <LogoutButton />
+            <Nav current="/dashboard" showLogout />
           </div>
         </header>
 
@@ -152,10 +149,17 @@ export default function Dashboard() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-6 mb-6">
           <div className="bg-neutral-900 border border-neutral-800 p-6 rounded-xl shadow-lg">
             <p className="flex items-center gap-1.5 text-xs text-neutral-400 uppercase tracking-wider mb-1"><TrendingUp size={12} /> Total Revenue</p>
             <p className="text-3xl font-black font-mono text-white">₹{totalRevenue.toLocaleString('en-IN')}</p>
+          </div>
+          <div className="bg-neutral-900 border border-neutral-800 p-6 rounded-xl shadow-lg">
+            <p className="flex items-center gap-1.5 text-xs text-neutral-400 uppercase tracking-wider mb-1"><Wallet size={12} /> Gross Margin</p>
+            <p className="text-3xl font-black font-mono text-emerald-400">₹{totalMargin.toLocaleString('en-IN')}</p>
+            {itemsWithCost.length < items.length && items.length > 0 && (
+              <p className="text-[10px] text-neutral-600 mt-1">{marginCoverage}% of items have a cost price on file</p>
+            )}
           </div>
           <div className="bg-neutral-900 border border-neutral-800 p-6 rounded-xl shadow-lg">
             <p className="flex items-center gap-1.5 text-xs text-neutral-400 uppercase tracking-wider mb-1"><Package size={12} /> Units Sold</p>
@@ -224,12 +228,15 @@ export default function Dashboard() {
                 <div key={sale.id} className="py-3.5 flex justify-between items-center text-sm">
                   <div>
                     <p className="font-semibold text-neutral-100">
-                      {itemCountBySale.get(sale.id) || 0} item{(itemCountBySale.get(sale.id) || 0) !== 1 ? 's' : ''}
+                      {sale.customer_name || `${itemCountBySale.get(sale.id) || 0} item${(itemCountBySale.get(sale.id) || 0) !== 1 ? 's' : ''}`}
                       {sale.status && sale.status !== 'completed' && (
                         <span className="ml-2 text-[10px] uppercase text-amber-400 border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 rounded align-middle">{sale.status}</span>
                       )}
                     </p>
-                    <p className="text-xs text-neutral-400">{sale.discount_total > 0 ? `Discount: ₹${sale.discount_total} • ` : ''}Subtotal: ₹{sale.subtotal}</p>
+                    <p className="text-xs text-neutral-400">
+                      {sale.customer_name && `${itemCountBySale.get(sale.id) || 0} item${(itemCountBySale.get(sale.id) || 0) !== 1 ? 's' : ''}${sale.customer_phone ? ` · ${sale.customer_phone}` : ''} · `}
+                      {sale.discount_total > 0 ? `Discount: ₹${sale.discount_total} • ` : ''}Subtotal: ₹{sale.subtotal}
+                    </p>
                   </div>
                   <div className="text-right">
                     <p className="font-mono text-sm font-bold text-white">₹{sale.total}</p>

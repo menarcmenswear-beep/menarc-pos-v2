@@ -6,7 +6,7 @@ import { NextResponse, type NextRequest } from "next/server";
 // terminal, not a per-user workspace. It still has no direct write
 // access to sensitive tables at the database level (see supabase.sql);
 // this middleware is about page access, not data access.
-const PROTECTED_PREFIXES = ["/inventory", "/dashboard"];
+const PROTECTED_PREFIXES = ["/inventory", "/dashboard", "/suppliers", "/purchases", "/returns"];
 
 export async function middleware(request: NextRequest) {
   const isProtected = PROTECTED_PREFIXES.some((p) =>

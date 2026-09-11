@@ -1,8 +1,8 @@
 'use client';
 import { useState, useEffect, useRef } from 'react';
 import { createClient } from '@/lib/supabase/client';
-import Link from 'next/link';
-import { ScanLine, ShoppingCart, Trash2, Plus, Minus, RefreshCw, CheckCircle2, XCircle, Loader2, Package, User } from 'lucide-react';
+import { ScanLine, ShoppingCart, Trash2, Plus, Minus, RefreshCw, CheckCircle2, XCircle, Loader2, Package, User, UserRound } from 'lucide-react';
+import { Nav } from '@/components/nav';
 
 const supabase = createClient();
 
@@ -30,6 +30,10 @@ export default function POS() {
   const [inventory, setInventory] = useState<any[]>([]);
   const [staff, setStaff] = useState<any[]>([]);
   const [staffId, setStaffId] = useState<string>('');
+  const [showCustomerFields, setShowCustomerFields] = useState(false);
+  const [customerName, setCustomerName] = useState('');
+  const [customerPhone, setCustomerPhone] = useState('');
+  const [customerEmail, setCustomerEmail] = useState('');
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState(false);
   const [toast, setToast] = useState<Toast>(null);
@@ -138,6 +142,9 @@ export default function POS() {
       p_items: items,
       p_offline_ref: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : null,
       p_staff_id: staffId || null,
+      p_customer_name: customerName.trim() || null,
+      p_customer_phone: customerPhone.trim() || null,
+      p_customer_email: customerEmail.trim() || null,
     });
 
     if (error) {
@@ -149,6 +156,9 @@ export default function POS() {
     playTone(1046, 140);
     notify('Sale completed successfully.', 'success');
     setCart([]);
+    setCustomerName('');
+    setCustomerPhone('');
+    setCustomerEmail('');
     setProcessing(false);
     fetchInventory();
   }
@@ -178,11 +188,7 @@ export default function POS() {
                 </select>
               </div>
             )}
-            <nav className="flex items-center gap-2">
-              <Link href="/" className="text-xs text-white bg-neutral-800 border border-neutral-700 px-3 py-1.5 rounded transition">POS Checkout</Link>
-              <Link href="/inventory" className="text-xs text-neutral-400 hover:text-white bg-neutral-900 border border-neutral-800 px-3 py-1.5 rounded transition">Inventory</Link>
-              <Link href="/dashboard" className="text-xs text-neutral-400 hover:text-white bg-neutral-900 border border-neutral-800 px-3 py-1.5 rounded transition">Dashboard</Link>
-            </nav>
+            <Nav current="/" />
           </div>
         </header>
 
@@ -286,6 +292,31 @@ export default function POS() {
 
               {cart.length > 0 && (
                 <div className="pt-4 border-t border-neutral-800 mt-4">
+                  <button
+                    onClick={() => setShowCustomerFields(!showCustomerFields)}
+                    className="flex items-center gap-1.5 text-xs text-neutral-400 hover:text-white mb-3"
+                  >
+                    <UserRound size={12} /> {showCustomerFields ? 'Hide' : 'Add'} customer details (optional)
+                  </button>
+                  {showCustomerFields && (
+                    <div className="grid grid-cols-2 gap-2 mb-4">
+                      <input
+                        type="text" placeholder="Customer name"
+                        className="col-span-2 bg-neutral-950 border border-neutral-700 rounded p-2 text-xs text-white focus:outline-none focus:border-white"
+                        value={customerName} onChange={(e) => setCustomerName(e.target.value)}
+                      />
+                      <input
+                        type="tel" placeholder="Phone number"
+                        className="bg-neutral-950 border border-neutral-700 rounded p-2 text-xs text-white focus:outline-none focus:border-white"
+                        value={customerPhone} onChange={(e) => setCustomerPhone(e.target.value)}
+                      />
+                      <input
+                        type="email" placeholder="Email (optional)"
+                        className="bg-neutral-950 border border-neutral-700 rounded p-2 text-xs text-white focus:outline-none focus:border-white"
+                        value={customerEmail} onChange={(e) => setCustomerEmail(e.target.value)}
+                      />
+                    </div>
+                  )}
                   <div className="flex justify-between items-center text-lg font-bold mb-4">
                     <span>Total</span>
                     <span className="font-mono text-white">₹{cartTotal}</span>

@@ -1,10 +1,23 @@
 'use client';
 import { useState, useEffect, useRef } from 'react';
 import { createClient } from '@/lib/supabase/client';
-import { ScanLine, ShoppingCart, Trash2, Plus, Minus, RefreshCw, CheckCircle2, XCircle, Loader2, Package, User, UserRound, Printer, Percent } from 'lucide-react';
+import { ScanLine, ShoppingCart, Trash2, Plus, Minus, RefreshCw, CheckCircle2, XCircle, Loader2, Package, User, UserRound, Printer, Percent, Wifi, WifiOff, CloudUpload, AlertTriangle, X } from 'lucide-react';
 import { Nav } from '@/components/nav';
 
 const supabase = createClient();
+
+const OFFLINE_QUEUE_KEY = 'menarc_offline_sale_queue';
+
+type QueuedSale = {
+  offlineRef: string;
+  items: { sku: string; qty: number; item_rate: number; discount: number }[];
+  customerName: string;
+  customerPhone: string;
+  customerEmail: string;
+  staffId: string | null;
+  queuedAt: string;
+  lastError?: string;
+};
 
 type Toast = { msg: string; type: 'success' | 'error' | 'info' } | null;
 
@@ -38,12 +51,48 @@ export default function POS() {
   const [toast, setToast] = useState<Toast>(null);
   const [receipt, setReceipt] = useState<any | null>(null);
   const [receiptVariant, setReceiptVariant] = useState<'thermal' | 'professional'>('thermal');
+  const [isOnline, setIsOnline] = useState(true);
+  const [offlineQueue, setOfflineQueue] = useState<QueuedSale[]>([]);
+  const [syncing, setSyncing] = useState(false);
+  const [showQueuePanel, setShowQueuePanel] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     fetchInventory();
     fetchStaff();
+
+    // Load any sales that were queued offline in a previous session
+    try {
+      const stored = localStorage.getItem(OFFLINE_QUEUE_KEY);
+      if (stored) setOfflineQueue(JSON.parse(stored));
+    } catch {
+      // Corrupt or inaccessible storage — start with an empty queue rather than crash
+    }
+
+    setIsOnline(navigator.onLine);
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
   }, []);
+
+  // Auto-sync whenever connectivity comes back, and retry periodically in case
+  // navigator.onLine reports "online" while the connection is still unreliable.
+  useEffect(() => {
+    if (isOnline && offlineQueue.length > 0) {
+      syncQueue();
+    }
+    if (offlineQueue.length === 0) return;
+    const interval = setInterval(() => {
+      if (navigator.onLine) syncQueue();
+    }, 30000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOnline, offlineQueue.length]);
 
   function notify(msg: string, type: 'success' | 'error' | 'info' = 'info') {
     setToast({ msg, type });
@@ -155,6 +204,121 @@ export default function POS() {
     setCart(cart.filter((_, i) => i !== index));
   }
 
+  function persistQueue(queue: QueuedSale[]) {
+    setOfflineQueue(queue);
+    try {
+      localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(queue));
+    } catch {
+      // If storage is full/unavailable, the in-memory queue still works for this
+      // session — sales just won't survive a page reload while offline.
+    }
+  }
+
+  function isLikelyNetworkError(err: any): boolean {
+    if (!err) return false;
+    if (typeof err.message === 'string' && /fetch|network|failed to fetch/i.test(err.message)) return true;
+    // Real Postgres/PostgREST errors carry a code/details/hint; a bare failure usually doesn't.
+    return !err.code && !err.details && !err.hint;
+  }
+
+  function buildReceipt(id: string, snapshot: typeof cart, custName: string, custPhone: string, custEmail: string, queued: boolean) {
+    const cashier = staff.find(s => s.id === staffId);
+    const subtotal = snapshot.reduce((acc, i) => acc + i.price * i.checkoutQty, 0);
+    const discountTotal = snapshot.reduce((acc, i) => acc + i.discount, 0);
+    setReceipt({
+      id,
+      queued,
+      date: new Date(),
+      cashierName: cashier?.full_name || null,
+      customerName: custName,
+      customerPhone: custPhone,
+      customerEmail: custEmail,
+      items: snapshot.map(i => ({
+        sku: i.sku,
+        name: i.name,
+        qty: i.checkoutQty,
+        rate: i.price,
+        discount: i.discount,
+        lineTotal: i.price * i.checkoutQty - i.discount,
+        hsn: i.hsn_code || null,
+        gstRate: i.gst_rate || 0,
+      })),
+      subtotal,
+      discountTotal,
+      total: subtotal - discountTotal,
+    });
+  }
+
+  function queueSaleOffline(items: QueuedSale['items'], offlineRef: string, snapshot: typeof cart, custName: string, custPhone: string, custEmail: string) {
+    const queued: QueuedSale = {
+      offlineRef,
+      items,
+      customerName: custName,
+      customerPhone: custPhone,
+      customerEmail: custEmail,
+      staffId: staffId || null,
+      queuedAt: new Date().toISOString(),
+    };
+    persistQueue([...offlineQueue, queued]);
+
+    // Optimistically reflect the sale in the local stock view so the next
+    // offline sale on this device doesn't oversell — the server is the real
+    // source of truth once this syncs.
+    setInventory(prev => prev.map(inv => {
+      const sold = items.find(i => i.sku === inv.sku);
+      return sold ? { ...inv, current_quantity: Math.max(0, inv.current_quantity - sold.qty) } : inv;
+    }));
+
+    playTone(660, 160);
+    notify('No connection — sale saved on this device and will sync automatically.', 'info');
+    buildReceipt(offlineRef, snapshot, custName, custPhone, custEmail, true);
+  }
+
+  async function syncQueue() {
+    if (offlineQueue.length === 0 || syncing) return;
+    setSyncing(true);
+
+    const remaining: QueuedSale[] = [];
+    let syncedCount = 0;
+
+    for (let i = 0; i < offlineQueue.length; i++) {
+      const q = offlineQueue[i];
+      const { error } = await supabase.rpc('record_sale', {
+        p_items: q.items,
+        p_offline_ref: q.offlineRef,
+        p_staff_id: q.staffId,
+        p_customer_name: q.customerName || null,
+        p_customer_phone: q.customerPhone || null,
+        p_customer_email: q.customerEmail || null,
+      });
+
+      if (error) {
+        if (isLikelyNetworkError(error)) {
+          // Still offline (or network dropped mid-sync) — stop here, keep this
+          // item and everything after it untouched, try again on the next trigger.
+          remaining.push(...offlineQueue.slice(i));
+          break;
+        }
+        // A real error (e.g. insufficient stock now that other sales synced) —
+        // keep it in the queue with the reason so staff can see and resolve it.
+        remaining.push({ ...q, lastError: error.message });
+      } else {
+        syncedCount++;
+      }
+    }
+
+    persistQueue(remaining);
+    if (syncedCount > 0) {
+      notify(`${syncedCount} queued sale${syncedCount > 1 ? 's' : ''} synced successfully.`, 'success');
+      fetchInventory();
+    }
+    setSyncing(false);
+  }
+
+  function discardQueuedSale(offlineRef: string) {
+    persistQueue(offlineQueue.filter(q => q.offlineRef !== offlineRef));
+  }
+
   async function completeSale() {
     if (cart.length === 0) return;
 
@@ -176,53 +340,52 @@ export default function POS() {
       item_rate: item.price,
       discount: item.discount,
     }));
+    const offlineRef = crypto.randomUUID();
+    const cartSnapshot = cart;
+    const custName = customerName.trim();
+    const custPhone = customerPhone.trim();
+    const custEmail = customerEmail.trim();
 
-    const { data: saleId, error } = await supabase.rpc('record_sale', {
-      p_items: items,
-      p_offline_ref: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : null,
-      p_staff_id: staffId || null,
-      p_customer_name: customerName.trim() || null,
-      p_customer_phone: customerPhone.trim() || null,
-      p_customer_email: customerEmail.trim() || null,
-    });
-
-    if (error) {
-      notify('Sale failed: ' + error.message, 'error');
+    if (!navigator.onLine) {
+      queueSaleOffline(items, offlineRef, cartSnapshot, custName, custPhone, custEmail);
+      setCart([]);
+      setCustomerName(''); setCustomerPhone(''); setCustomerEmail('');
       setProcessing(false);
       return;
     }
 
-    const cashier = staff.find(s => s.id === staffId);
-    setReceipt({
-      id: saleId,
-      date: new Date(),
-      cashierName: cashier?.full_name || null,
-      customerName: customerName.trim(),
-      customerPhone: customerPhone.trim(),
-      customerEmail: customerEmail.trim(),
-      items: cart.map(i => ({
-        sku: i.sku,
-        name: i.name,
-        qty: i.checkoutQty,
-        rate: i.price,
-        discount: i.discount,
-        lineTotal: i.price * i.checkoutQty - i.discount,
-        hsn: i.hsn_code || null,
-        gstRate: i.gst_rate || 0,
-      })),
-      subtotal: cartSubtotal,
-      discountTotal: cartDiscountTotal,
-      total: cartTotal,
-    });
+    try {
+      const { data: saleId, error } = await supabase.rpc('record_sale', {
+        p_items: items,
+        p_offline_ref: offlineRef,
+        p_staff_id: staffId || null,
+        p_customer_name: custName || null,
+        p_customer_phone: custPhone || null,
+        p_customer_email: custEmail || null,
+      });
 
-    playTone(1046, 140);
-    notify('Sale completed successfully.', 'success');
+      if (error) {
+        if (isLikelyNetworkError(error)) {
+          queueSaleOffline(items, offlineRef, cartSnapshot, custName, custPhone, custEmail);
+        } else {
+          notify('Sale failed: ' + error.message, 'error');
+          setProcessing(false);
+          return;
+        }
+      } else {
+        playTone(1046, 140);
+        notify('Sale completed successfully.', 'success');
+        buildReceipt(saleId, cartSnapshot, custName, custPhone, custEmail, false);
+        fetchInventory();
+      }
+    } catch {
+      // fetch itself threw — no connection at all
+      queueSaleOffline(items, offlineRef, cartSnapshot, custName, custPhone, custEmail);
+    }
+
     setCart([]);
-    setCustomerName('');
-    setCustomerPhone('');
-    setCustomerEmail('');
+    setCustomerName(''); setCustomerPhone(''); setCustomerEmail('');
     setProcessing(false);
-    fetchInventory();
   }
 
   const cartSubtotal = cart.reduce((acc, item) => acc + (item.price * item.checkoutQty), 0);
@@ -239,6 +402,24 @@ export default function POS() {
             <p className="text-xs text-neutral-400">Offline Point of Sale & Barcode Scanner</p>
           </div>
           <div className="flex items-center gap-3">
+            <div
+              className={`flex items-center gap-1.5 text-[11px] px-2.5 py-1.5 rounded border ${
+                isOnline ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' : 'text-red-400 border-red-500/30 bg-red-500/10'
+              }`}
+              title={isOnline ? 'Connected' : 'No connection — sales will be saved locally'}
+            >
+              {isOnline ? <Wifi size={12} /> : <WifiOff size={12} />}
+              {isOnline ? 'Online' : 'Offline'}
+            </div>
+            {offlineQueue.length > 0 && (
+              <button
+                onClick={() => setShowQueuePanel(true)}
+                className="flex items-center gap-1.5 text-[11px] px-2.5 py-1.5 rounded border text-amber-400 border-amber-500/30 bg-amber-500/10 hover:bg-amber-500/20 transition"
+              >
+                {syncing ? <Loader2 size={12} className="animate-spin" /> : <CloudUpload size={12} />}
+                {offlineQueue.length} pending sync
+              </button>
+            )}
             {staff.length > 0 && (
               <div className="relative">
                 <User className="absolute left-2.5 top-1/2 -translate-y-1/2 text-neutral-500 pointer-events-none" size={12} />
@@ -487,10 +668,13 @@ export default function POS() {
                     <p className="font-black text-lg tracking-[0.2em]">MENARC</p>
                     <p className="text-[9px] italic text-neutral-600 tracking-wide">Never go unnoticed</p>
                     <p className="text-[10px] text-neutral-600 mt-1">Sale Receipt</p>
+                    {receipt.queued && (
+                      <p className="text-[9px] font-bold text-amber-600 mt-1">⚠ SAVED OFFLINE — PENDING SYNC</p>
+                    )}
                   </div>
                   <div className="border-t border-dashed border-neutral-400 my-2" />
                   <p>Date: {receipt.date.toLocaleString()}</p>
-                  <p>Receipt #: {receipt.id ? String(receipt.id).slice(0, 8) : '—'}</p>
+                  <p>Receipt #: {receipt.queued ? 'Pending…' : (receipt.id ? String(receipt.id).slice(0, 8) : '—')}</p>
                   {receipt.cashierName && <p>Cashier: {receipt.cashierName}</p>}
                   <div className="border-t border-dashed border-neutral-400 my-2" />
                   <p>Customer: {receipt.customerName}</p>
@@ -529,6 +713,11 @@ export default function POS() {
                   </div>
 
                   <div className="p-8">
+                    {receipt.queued && (
+                      <div className="mb-4 flex items-center gap-2 text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2 text-xs font-semibold">
+                        <AlertTriangle size={13} /> Saved offline — will sync automatically once reconnected
+                      </div>
+                    )}
                     <div className="flex justify-between mb-6 pb-6 border-b border-neutral-200">
                       <div>
                         <p className="text-[11px] text-neutral-500 uppercase tracking-wide mb-1">Billed To</p>
@@ -538,7 +727,7 @@ export default function POS() {
                       </div>
                       <div className="text-right">
                         <p className="text-[11px] text-neutral-500 uppercase tracking-wide mb-1">Invoice Details</p>
-                        <p className="text-sm text-neutral-700">Receipt #{receipt.id ? String(receipt.id).slice(0, 8) : '—'}</p>
+                        <p className="text-sm text-neutral-700">Receipt #{receipt.queued ? 'Pending…' : (receipt.id ? String(receipt.id).slice(0, 8) : '—')}</p>
                         <p className="text-sm text-neutral-700">{receipt.date.toLocaleDateString()} · {receipt.date.toLocaleTimeString()}</p>
                         {receipt.cashierName && <p className="text-sm text-neutral-700">Served by {receipt.cashierName}</p>}
                       </div>
@@ -627,6 +816,52 @@ export default function POS() {
           </>
         );
       })()}
+
+      {showQueuePanel && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+          <div className="bg-neutral-900 border border-neutral-800 rounded-xl w-full max-w-md max-h-[80vh] flex flex-col">
+            <div className="flex justify-between items-center p-5 border-b border-neutral-800">
+              <h2 className="flex items-center gap-2 font-bold text-base text-white">
+                <CloudUpload size={16} /> Pending Sync ({offlineQueue.length})
+              </h2>
+              <button onClick={() => setShowQueuePanel(false)} className="text-neutral-500 hover:text-white"><X size={18} /></button>
+            </div>
+            <div className="p-5 overflow-y-auto space-y-3">
+              {offlineQueue.length === 0 ? (
+                <p className="text-sm text-neutral-500">Nothing pending — all sales are synced.</p>
+              ) : (
+                offlineQueue.map((q) => (
+                  <div key={q.offlineRef} className="bg-neutral-950 border border-neutral-800 rounded p-3 text-sm">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <p className="font-medium text-white">{q.customerName || 'Walk-in customer'}</p>
+                        <p className="text-xs text-neutral-400">{q.customerPhone} · {q.items.length} item{q.items.length !== 1 ? 's' : ''}</p>
+                        <p className="text-xs text-neutral-600 mt-1">Queued {new Date(q.queuedAt).toLocaleString()}</p>
+                      </div>
+                      <button onClick={() => discardQueuedSale(q.offlineRef)} className="text-neutral-600 hover:text-red-400 shrink-0" aria-label="Discard"><Trash2 size={13} /></button>
+                    </div>
+                    {q.lastError && (
+                      <p className="flex items-center gap-1.5 text-[11px] text-red-400 mt-2 pt-2 border-t border-neutral-800">
+                        <AlertTriangle size={11} /> {q.lastError}
+                      </p>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+            <div className="p-5 border-t border-neutral-800">
+              <button
+                onClick={syncQueue}
+                disabled={syncing || !isOnline || offlineQueue.length === 0}
+                className="w-full flex items-center justify-center gap-2 bg-white text-black font-bold py-2.5 rounded-lg text-sm disabled:opacity-50"
+              >
+                {syncing ? <><Loader2 size={14} className="animate-spin" /> Syncing...</> : 'Sync Now'}
+              </button>
+              {!isOnline && <p className="text-[11px] text-neutral-500 text-center mt-2">Waiting for a connection to sync.</p>}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

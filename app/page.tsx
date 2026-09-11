@@ -92,7 +92,7 @@ export default function POS() {
           notify('Cannot add more than available stock.', 'error');
         }
       } else {
-        setCart([...cart, { ...item, checkoutQty: 1, discount: 0 }]);
+        setCart([...cart, { ...item, checkoutQty: 1, discount: 0, discountType: 'flat', discountInput: '' }]);
         playTone(880, 90);
       }
 
@@ -105,14 +105,29 @@ export default function POS() {
     inputRef.current?.focus();
   }
 
-  function updateCartDiscount(index: number, value: string) {
-    const item = cart[index];
-    const lineValue = item.price * item.checkoutQty;
-    let discount = parseFloat(value) || 0;
+  function computeDiscount(price: number, qty: number, type: 'flat' | 'percent', rawInput: string): number {
+    const lineValue = price * qty;
+    const raw = parseFloat(rawInput) || 0;
+    let discount = type === 'percent' ? (lineValue * Math.min(raw, 100)) / 100 : raw;
     if (discount < 0) discount = 0;
     if (discount > lineValue) discount = lineValue;
+    return discount;
+  }
+
+  function updateCartDiscount(index: number, rawValue: string) {
+    const item = cart[index];
+    const discount = computeDiscount(item.price, item.checkoutQty, item.discountType, rawValue);
     const updated = [...cart];
-    updated[index] = { ...updated[index], discount };
+    updated[index] = { ...updated[index], discountInput: rawValue, discount };
+    setCart(updated);
+  }
+
+  function toggleDiscountType(index: number) {
+    const item = cart[index];
+    const newType = item.discountType === 'flat' ? 'percent' : 'flat';
+    const discount = computeDiscount(item.price, item.checkoutQty, newType, item.discountInput);
+    const updated = [...cart];
+    updated[index] = { ...updated[index], discountType: newType, discount };
     setCart(updated);
   }
 
@@ -131,9 +146,8 @@ export default function POS() {
       return;
     }
     const updated = [...cart];
-    const newLineValue = item.price * newQty;
-    const clampedDiscount = Math.min(item.discount, newLineValue);
-    updated[index] = { ...updated[index], checkoutQty: newQty, discount: clampedDiscount };
+    const recomputedDiscount = computeDiscount(item.price, newQty, item.discountType, item.discountInput);
+    updated[index] = { ...updated[index], checkoutQty: newQty, discount: recomputedDiscount };
     setCart(updated);
   }
 
@@ -146,6 +160,11 @@ export default function POS() {
 
     if (!customerName.trim() || !customerPhone.trim()) {
       notify('Customer name and phone number are required to complete a sale.', 'error');
+      return;
+    }
+
+    if (!/^\d{10}$/.test(customerPhone.trim())) {
+      notify('Phone number must be exactly 10 digits.', 'error');
       return;
     }
 
@@ -262,18 +281,28 @@ export default function POS() {
                   const isOut = item.current_quantity <= 0;
                   return (
                     <div key={item.sku} className={`py-3 flex justify-between items-center text-sm ${isOut ? 'opacity-50' : ''}`}>
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <p className="font-semibold text-neutral-100">{item.sku}</p>
-                          {isOut ? (
-                            <span className="bg-red-500/10 text-red-400 border border-red-500/30 text-[10px] px-1.5 py-0.5 rounded font-medium">Out of Stock</span>
-                          ) : isLowStock && (
-                            <span className="bg-amber-500/10 text-amber-400 border border-amber-500/30 text-[10px] px-1.5 py-0.5 rounded font-medium">Low Stock</span>
-                          )}
+                      <div className="flex items-center gap-3 min-w-0">
+                        {item.image_url ? (
+                          /* eslint-disable-next-line @next/next/no-img-element */
+                          <img src={item.image_url} alt={item.sku} className="w-9 h-9 object-cover rounded border border-neutral-800 shrink-0" />
+                        ) : (
+                          <div className="w-9 h-9 rounded border border-neutral-800 bg-neutral-950 flex items-center justify-center shrink-0">
+                            <Package size={13} className="text-neutral-700" />
+                          </div>
+                        )}
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <p className="font-semibold text-neutral-100">{item.sku}</p>
+                            {isOut ? (
+                              <span className="bg-red-500/10 text-red-400 border border-red-500/30 text-[10px] px-1.5 py-0.5 rounded font-medium">Out of Stock</span>
+                            ) : isLowStock && (
+                              <span className="bg-amber-500/10 text-amber-400 border border-amber-500/30 text-[10px] px-1.5 py-0.5 rounded font-medium">Low Stock</span>
+                            )}
+                          </div>
+                          <p className="text-xs text-neutral-400 truncate">{item.name} {item.color ? `• ${item.color}` : ''} {item.size ? `• ${item.size}` : ''}</p>
                         </div>
-                        <p className="text-xs text-neutral-400">{item.name} {item.color ? `• ${item.color}` : ''} {item.size ? `• ${item.size}` : ''}</p>
                       </div>
-                      <div className="text-right">
+                      <div className="text-right shrink-0">
                         <p className={`font-mono text-sm ${isLowStock ? 'text-amber-400 font-bold' : 'text-neutral-300'}`}>{item.current_quantity} in stock</p>
                         <p className="text-xs text-neutral-500">₹{item.price}</p>
                       </div>
@@ -320,9 +349,19 @@ export default function POS() {
                       return (
                         <div key={index} className="py-2.5 text-sm">
                           <div className="flex justify-between items-center">
-                            <div>
-                              <p className="font-medium text-white">{item.sku}</p>
-                              <p className="text-xs text-neutral-400">₹{item.price} each</p>
+                            <div className="flex items-center gap-2 min-w-0">
+                              {item.image_url ? (
+                                /* eslint-disable-next-line @next/next/no-img-element */
+                                <img src={item.image_url} alt={item.sku} className="w-7 h-7 object-cover rounded border border-neutral-800 shrink-0" />
+                              ) : (
+                                <div className="w-7 h-7 rounded border border-neutral-800 bg-neutral-950 flex items-center justify-center shrink-0">
+                                  <Package size={10} className="text-neutral-700" />
+                                </div>
+                              )}
+                              <div>
+                                <p className="font-medium text-white">{item.sku}</p>
+                                <p className="text-xs text-neutral-400">₹{item.price} each</p>
+                              </div>
                             </div>
                             <div className="flex items-center gap-3">
                               <div className="flex items-center gap-1.5 bg-neutral-800 rounded px-1.5 py-1">
@@ -338,13 +377,24 @@ export default function POS() {
                             </div>
                           </div>
                           <div className="flex items-center gap-1.5 mt-1.5 pl-0.5">
-                            <Percent size={11} className="text-neutral-600" />
+                            <button
+                              type="button"
+                              onClick={() => toggleDiscountType(index)}
+                              className="flex items-center justify-center w-6 h-6 rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-[10px] font-bold shrink-0"
+                              title="Toggle ₹ / %"
+                            >
+                              {item.discountType === 'percent' ? <Percent size={11} /> : '₹'}
+                            </button>
                             <input
-                              type="number" min="0" max={lineGross} placeholder="Discount ₹"
+                              type="number" min="0" max={item.discountType === 'percent' ? 100 : lineGross}
+                              placeholder={item.discountType === 'percent' ? 'Discount %' : 'Discount ₹'}
                               className="bg-neutral-950 border border-neutral-800 rounded px-2 py-1 text-[11px] text-neutral-300 w-24 focus:outline-none focus:border-neutral-600"
-                              value={item.discount || ''}
+                              value={item.discountInput || ''}
                               onChange={(e) => updateCartDiscount(index, e.target.value)}
                             />
+                            {item.discount > 0 && item.discountType === 'percent' && (
+                              <span className="text-[10px] text-neutral-600">= ₹{item.discount.toFixed(0)}</span>
+                            )}
                           </div>
                         </div>
                       );
@@ -365,9 +415,11 @@ export default function POS() {
                       value={customerName} onChange={(e) => setCustomerName(e.target.value)}
                     />
                     <input
-                      type="tel" placeholder="Phone number *" required
+                      type="tel" inputMode="numeric" placeholder="10-digit phone number *" required
+                      maxLength={10}
                       className="bg-neutral-950 border border-neutral-700 rounded p-2 text-xs text-white focus:outline-none focus:border-white"
-                      value={customerPhone} onChange={(e) => setCustomerPhone(e.target.value)}
+                      value={customerPhone}
+                      onChange={(e) => setCustomerPhone(e.target.value.replace(/\D/g, '').slice(0, 10))}
                     />
                     <input
                       type="email" placeholder="Email (optional)"

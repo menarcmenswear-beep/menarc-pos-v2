@@ -37,6 +37,7 @@ export default function POS() {
   const [processing, setProcessing] = useState(false);
   const [toast, setToast] = useState<Toast>(null);
   const [receipt, setReceipt] = useState<any | null>(null);
+  const [receiptVariant, setReceiptVariant] = useState<'thermal' | 'professional'>('thermal');
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -182,10 +183,13 @@ export default function POS() {
       customerEmail: customerEmail.trim(),
       items: cart.map(i => ({
         sku: i.sku,
+        name: i.name,
         qty: i.checkoutQty,
         rate: i.price,
         discount: i.discount,
         lineTotal: i.price * i.checkoutQty - i.discount,
+        hsn: i.hsn_code || null,
+        gstRate: i.gst_rate || 0,
       })),
       subtotal: cartSubtotal,
       discountTotal: cartDiscountTotal,
@@ -406,61 +410,171 @@ export default function POS() {
         </div>
       )}
 
-      {receipt && (
-        <>
-          <style>{`
-            @media print {
-              body * { visibility: hidden; }
-              #receipt-print, #receipt-print * { visibility: visible; }
-              #receipt-print { position: fixed; top: 0; left: 0; width: 100%; }
-              .no-print { display: none !important; }
-            }
-          `}</style>
-          <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-            <div id="receipt-print" className="bg-white text-black w-full max-w-xs rounded-lg p-6 font-mono text-xs max-h-[85vh] overflow-y-auto">
-              <div className="text-center mb-3">
-                <p className="font-black text-base tracking-widest">MENARC</p>
-                <p className="text-[10px] text-neutral-600">Sale Receipt</p>
-              </div>
-              <div className="border-t border-dashed border-neutral-400 my-2" />
-              <p>Date: {receipt.date.toLocaleString()}</p>
-              <p>Receipt #: {receipt.id ? String(receipt.id).slice(0, 8) : '—'}</p>
-              {receipt.cashierName && <p>Cashier: {receipt.cashierName}</p>}
-              <div className="border-t border-dashed border-neutral-400 my-2" />
-              <p>Customer: {receipt.customerName}</p>
-              <p>Phone: {receipt.customerPhone}</p>
-              {receipt.customerEmail && <p>Email: {receipt.customerEmail}</p>}
-              <div className="border-t border-dashed border-neutral-400 my-2" />
-              {receipt.items.map((it: any, i: number) => (
-                <div key={i} className="mb-1.5">
-                  <div className="flex justify-between font-semibold"><span>{it.sku}</span><span>₹{it.lineTotal.toFixed(2)}</span></div>
-                  <div className="text-[10px] text-neutral-600">
-                    {it.qty} × ₹{it.rate}{it.discount > 0 ? ` − ₹${it.discount} disc.` : ''}
+      {receipt && (() => {
+        const totalGst = receipt.items.reduce((acc: number, it: any) => {
+          if (!it.gstRate) return acc;
+          return acc + (it.lineTotal - it.lineTotal / (1 + it.gstRate / 100));
+        }, 0);
+        const hasGst = totalGst > 0.01;
+
+        return (
+          <>
+            <style>{`
+              @media print {
+                body * { visibility: hidden; }
+                #receipt-print, #receipt-print * { visibility: visible; }
+                #receipt-print { position: fixed; top: 0; left: 0; width: 100%; }
+                .no-print { display: none !important; }
+                @page { size: ${receiptVariant === 'thermal' ? '80mm auto' : 'A4'}; margin: ${receiptVariant === 'thermal' ? '0' : '15mm'}; }
+              }
+            `}</style>
+            <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4 overflow-y-auto">
+              {receiptVariant === 'thermal' ? (
+                <div id="receipt-print" className="bg-white text-black w-full max-w-[300px] mx-auto rounded-lg p-5 font-mono text-xs my-8">
+                  <div className="text-center mb-2">
+                    <p className="font-black text-lg tracking-[0.2em]">MENARC</p>
+                    <p className="text-[9px] italic text-neutral-600 tracking-wide">Never go unnoticed</p>
+                    <p className="text-[10px] text-neutral-600 mt-1">Sale Receipt</p>
+                  </div>
+                  <div className="border-t border-dashed border-neutral-400 my-2" />
+                  <p>Date: {receipt.date.toLocaleString()}</p>
+                  <p>Receipt #: {receipt.id ? String(receipt.id).slice(0, 8) : '—'}</p>
+                  {receipt.cashierName && <p>Cashier: {receipt.cashierName}</p>}
+                  <div className="border-t border-dashed border-neutral-400 my-2" />
+                  <p>Customer: {receipt.customerName}</p>
+                  <p>Phone: {receipt.customerPhone}</p>
+                  {receipt.customerEmail && <p>Email: {receipt.customerEmail}</p>}
+                  <div className="border-t border-dashed border-neutral-400 my-2" />
+                  {receipt.items.map((it: any, i: number) => (
+                    <div key={i} className="mb-1.5">
+                      <div className="flex justify-between font-semibold"><span>{it.sku}</span><span>₹{it.lineTotal.toFixed(2)}</span></div>
+                      <div className="text-[10px] text-neutral-600">
+                        {it.qty} × ₹{it.rate}{it.discount > 0 ? ` − ₹${it.discount} disc.` : ''}
+                      </div>
+                    </div>
+                  ))}
+                  <div className="border-t border-dashed border-neutral-400 my-2" />
+                  <div className="flex justify-between"><span>Subtotal</span><span>₹{receipt.subtotal.toFixed(2)}</span></div>
+                  {receipt.discountTotal > 0 && (
+                    <div className="flex justify-between"><span>Discount</span><span>−₹{receipt.discountTotal.toFixed(2)}</span></div>
+                  )}
+                  {hasGst && <div className="flex justify-between text-neutral-600"><span>(incl. GST)</span><span>₹{totalGst.toFixed(2)}</span></div>}
+                  <div className="flex justify-between font-bold text-sm mt-1 pt-1 border-t border-neutral-300">
+                    <span>Total</span><span>₹{receipt.total.toFixed(2)}</span>
+                  </div>
+                  <div className="border-t border-dashed border-neutral-400 my-3" />
+                  <p className="text-center text-[10px] italic text-neutral-600">Never go unnoticed.</p>
+                  <p className="text-center text-[9px] text-neutral-500 mt-1">Thank you for shopping with us!</p>
+                </div>
+              ) : (
+                <div id="receipt-print" className="bg-white text-black w-full max-w-2xl mx-auto rounded-lg overflow-hidden my-8 shadow-2xl">
+                  <div className="bg-black px-8 py-6 flex items-center justify-between">
+                    <img src="/menarc-logo.jpg" alt="MENARC" className="h-14 w-auto rounded" />
+                    <div className="text-right">
+                      <p className="text-amber-400 font-semibold text-sm tracking-wide">Never go unnoticed</p>
+                      <p className="text-neutral-400 text-[11px] mt-1">Tax Invoice</p>
+                    </div>
+                  </div>
+
+                  <div className="p-8">
+                    <div className="flex justify-between mb-6 pb-6 border-b border-neutral-200">
+                      <div>
+                        <p className="text-[11px] text-neutral-500 uppercase tracking-wide mb-1">Billed To</p>
+                        <p className="font-semibold text-neutral-900">{receipt.customerName}</p>
+                        <p className="text-sm text-neutral-600">{receipt.customerPhone}</p>
+                        {receipt.customerEmail && <p className="text-sm text-neutral-600">{receipt.customerEmail}</p>}
+                      </div>
+                      <div className="text-right">
+                        <p className="text-[11px] text-neutral-500 uppercase tracking-wide mb-1">Invoice Details</p>
+                        <p className="text-sm text-neutral-700">Receipt #{receipt.id ? String(receipt.id).slice(0, 8) : '—'}</p>
+                        <p className="text-sm text-neutral-700">{receipt.date.toLocaleDateString()} · {receipt.date.toLocaleTimeString()}</p>
+                        {receipt.cashierName && <p className="text-sm text-neutral-700">Served by {receipt.cashierName}</p>}
+                      </div>
+                    </div>
+
+                    <table className="w-full text-sm mb-6">
+                      <thead>
+                        <tr className="text-left text-[11px] text-neutral-500 uppercase tracking-wide border-b border-neutral-200">
+                          <th className="pb-2 font-medium">Item</th>
+                          {hasGst && <th className="pb-2 font-medium text-center">HSN</th>}
+                          <th className="pb-2 font-medium text-center">Qty</th>
+                          <th className="pb-2 font-medium text-right">Rate</th>
+                          {hasGst && <th className="pb-2 font-medium text-right">GST%</th>}
+                          <th className="pb-2 font-medium text-right">Amount</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {receipt.items.map((it: any, i: number) => (
+                          <tr key={i} className="border-b border-neutral-100">
+                            <td className="py-2.5">
+                              <p className="font-medium text-neutral-900">{it.sku}</p>
+                              {it.name && <p className="text-[11px] text-neutral-500">{it.name}</p>}
+                              {it.discount > 0 && <p className="text-[11px] text-amber-600">− ₹{it.discount} discount</p>}
+                            </td>
+                            {hasGst && <td className="py-2.5 text-center text-neutral-600 text-xs">{it.hsn || '—'}</td>}
+                            <td className="py-2.5 text-center text-neutral-700">{it.qty}</td>
+                            <td className="py-2.5 text-right text-neutral-700">₹{it.rate}</td>
+                            {hasGst && <td className="py-2.5 text-right text-neutral-600 text-xs">{it.gstRate || 0}%</td>}
+                            <td className="py-2.5 text-right font-medium text-neutral-900">₹{it.lineTotal.toFixed(2)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+
+                    <div className="flex justify-end">
+                      <div className="w-56 space-y-1.5">
+                        <div className="flex justify-between text-sm text-neutral-600">
+                          <span>Subtotal</span><span>₹{receipt.subtotal.toFixed(2)}</span>
+                        </div>
+                        {receipt.discountTotal > 0 && (
+                          <div className="flex justify-between text-sm text-amber-600">
+                            <span>Discount</span><span>−₹{receipt.discountTotal.toFixed(2)}</span>
+                          </div>
+                        )}
+                        {hasGst && (
+                          <div className="flex justify-between text-sm text-neutral-500">
+                            <span>GST (included)</span><span>₹{totalGst.toFixed(2)}</span>
+                          </div>
+                        )}
+                        <div className="flex justify-between text-lg font-bold text-neutral-900 pt-2 border-t border-neutral-200">
+                          <span>Total</span><span>₹{receipt.total.toFixed(2)}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="mt-8 pt-6 border-t border-neutral-200 text-center">
+                      <p className="text-neutral-900 font-semibold text-sm">Never go unnoticed.</p>
+                      <p className="text-neutral-400 text-xs mt-1">Thank you for shopping with MENARC.</p>
+                    </div>
                   </div>
                 </div>
-              ))}
-              <div className="border-t border-dashed border-neutral-400 my-2" />
-              <div className="flex justify-between"><span>Subtotal</span><span>₹{receipt.subtotal.toFixed(2)}</span></div>
-              {receipt.discountTotal > 0 && (
-                <div className="flex justify-between"><span>Discount</span><span>−₹{receipt.discountTotal.toFixed(2)}</span></div>
               )}
-              <div className="flex justify-between font-bold text-sm mt-1 pt-1 border-t border-neutral-300">
-                <span>Total</span><span>₹{receipt.total.toFixed(2)}</span>
-              </div>
-              <div className="border-t border-dashed border-neutral-400 my-3" />
-              <p className="text-center text-[10px] text-neutral-600">Thank you for shopping with us!</p>
             </div>
-          </div>
-          <div className="no-print fixed bottom-6 left-1/2 -translate-x-1/2 flex gap-2 z-[60]">
-            <button onClick={() => window.print()} className="flex items-center gap-2 bg-white text-black font-bold px-5 py-2.5 rounded-lg text-sm shadow-xl hover:bg-neutral-200 transition">
-              <Printer size={14} /> Print / Save PDF
-            </button>
-            <button onClick={() => setReceipt(null)} className="bg-neutral-800 text-white px-5 py-2.5 rounded-lg text-sm shadow-xl hover:bg-neutral-700 transition">
-              New Sale
-            </button>
-          </div>
-        </>
-      )}
+            <div className="no-print fixed bottom-6 left-1/2 -translate-x-1/2 flex flex-wrap justify-center gap-2 z-[60] px-4">
+              <div className="flex bg-neutral-900 border border-neutral-800 rounded-lg p-1">
+                <button
+                  onClick={() => setReceiptVariant('thermal')}
+                  className={`px-3 py-1.5 rounded text-xs font-medium transition ${receiptVariant === 'thermal' ? 'bg-white text-black' : 'text-neutral-400 hover:text-white'}`}
+                >
+                  Thermal
+                </button>
+                <button
+                  onClick={() => setReceiptVariant('professional')}
+                  className={`px-3 py-1.5 rounded text-xs font-medium transition ${receiptVariant === 'professional' ? 'bg-white text-black' : 'text-neutral-400 hover:text-white'}`}
+                >
+                  Professional
+                </button>
+              </div>
+              <button onClick={() => window.print()} className="flex items-center gap-2 bg-white text-black font-bold px-5 py-2.5 rounded-lg text-sm shadow-xl hover:bg-neutral-200 transition">
+                <Printer size={14} /> Print / Save PDF
+              </button>
+              <button onClick={() => setReceipt(null)} className="bg-neutral-800 text-white px-5 py-2.5 rounded-lg text-sm shadow-xl hover:bg-neutral-700 transition">
+                New Sale
+              </button>
+            </div>
+          </>
+        );
+      })()}
     </div>
   );
 }

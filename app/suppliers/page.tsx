@@ -1,7 +1,7 @@
 'use client';
 import { useState, useEffect } from 'react';
 import { createClient } from '@/lib/supabase/client';
-import { Truck, Pencil, Trash2, X, Check, CheckCircle2, XCircle, Plus, Lock, Phone, Mail, MapPin } from 'lucide-react';
+import { Truck, Pencil, Trash2, X, Check, CheckCircle2, XCircle, Plus, Lock, Phone, Mail, MapPin, Search } from 'lucide-react';
 import { Nav } from '@/components/nav';
 import { useStaffRole } from '@/lib/hooks/use-staff-role';
 
@@ -14,6 +14,7 @@ export default function SuppliersPage() {
   const [suppliers, setSuppliers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState<Toast>(null);
+  const [searchTerm, setSearchTerm] = useState('');
 
   const [name, setName] = useState('');
   const [contactPerson, setContactPerson] = useState('');
@@ -27,6 +28,17 @@ export default function SuppliersPage() {
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   useEffect(() => { fetchSuppliers(); }, []);
+
+  const filteredSuppliers = suppliers.filter((s) => {
+    if (!searchTerm) return true;
+    const term = searchTerm.toLowerCase();
+    return (
+      s.name?.toLowerCase().includes(term) ||
+      s.contact_person?.toLowerCase().includes(term) ||
+      s.phone?.includes(term) ||
+      s.email?.toLowerCase().includes(term)
+    );
+  });
 
   function notify(msg: string, type: 'success' | 'error' = 'success') {
     setToast({ msg, type });
@@ -44,6 +56,9 @@ export default function SuppliersPage() {
   async function handleAdd(e: React.FormEvent) {
     e.preventDefault();
     if (!name.trim()) return notify('Supplier name is required.', 'error');
+    if (phone.trim() && !/^\d{10}$/.test(phone.trim())) {
+      return notify('Phone number must be exactly 10 digits.', 'error');
+    }
 
     const { error } = await supabase.from('suppliers').insert({
       name: name.trim(),
@@ -69,6 +84,10 @@ export default function SuppliersPage() {
   }
 
   async function saveEdit() {
+    if (editDraft.phone && !/^\d{10}$/.test(editDraft.phone)) {
+      return notify('Phone number must be exactly 10 digits.', 'error');
+    }
+
     const { error } = await supabase.from('suppliers').update({
       name: editDraft.name,
       contact_person: editDraft.contact_person,
@@ -123,7 +142,7 @@ export default function SuppliersPage() {
                 <div className="grid grid-cols-2 gap-2">
                   <div>
                     <label className="text-xs text-neutral-400 block mb-1">Phone</label>
-                    <input type="tel" placeholder="+91..." className="bg-neutral-950 border border-neutral-700 rounded p-2 text-sm text-white focus:outline-none focus:border-white w-full" value={phone} onChange={(e) => setPhone(e.target.value)} />
+                    <input type="tel" inputMode="numeric" maxLength={10} placeholder="10-digit number" className="bg-neutral-950 border border-neutral-700 rounded p-2 text-sm text-white focus:outline-none focus:border-white w-full" value={phone} onChange={(e) => setPhone(e.target.value.replace(/\D/g, '').slice(0, 10))} />
                   </div>
                   <div>
                     <label className="text-xs text-neutral-400 block mb-1">Email</label>
@@ -144,18 +163,24 @@ export default function SuppliersPage() {
           )}
 
           <div className={isAdmin ? "md:col-span-2 bg-neutral-900 border border-neutral-800 p-6 rounded-xl shadow-lg" : "md:col-span-3 bg-neutral-900 border border-neutral-800 p-6 rounded-xl shadow-lg"}>
-            <div className="flex justify-between items-center mb-4">
-              <h2 className="flex items-center gap-2 font-bold text-base text-neutral-200"><Truck size={16} /> All Suppliers</h2>
-              <span className="text-xs text-neutral-500">{suppliers.length} on file {!isAdmin && !roleLoading && '· view-only'}</span>
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-3">
+              <div>
+                <h2 className="flex items-center gap-2 font-bold text-base text-neutral-200"><Truck size={16} /> All Suppliers</h2>
+                <p className="text-xs text-neutral-500">{filteredSuppliers.length} of {suppliers.length} shown {!isAdmin && !roleLoading && '· view-only'}</p>
+              </div>
+              <div className="relative w-full sm:w-56">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-neutral-500 pointer-events-none" size={12} />
+                <input type="text" placeholder="Search name, contact, phone..." className="bg-neutral-950 border border-neutral-700 text-white pl-7 pr-2 py-1.5 rounded text-xs focus:outline-none w-full" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
+              </div>
             </div>
 
             {loading ? (
               <div className="space-y-3 py-1">{[...Array(4)].map((_, i) => <div key={i} className="h-20 bg-neutral-800/50 rounded animate-pulse" />)}</div>
-            ) : suppliers.length === 0 ? (
-              <p className="text-sm text-neutral-500 py-4">No suppliers added yet.</p>
+            ) : filteredSuppliers.length === 0 ? (
+              <p className="text-sm text-neutral-500 py-4">{suppliers.length === 0 ? 'No suppliers added yet.' : 'No suppliers match your search.'}</p>
             ) : (
               <div className="divide-y divide-neutral-800">
-                {suppliers.map((s) => {
+                {filteredSuppliers.map((s) => {
                   const isEditing = editingId === s.id;
 
                   if (isEditing && isAdmin) {
@@ -164,7 +189,7 @@ export default function SuppliersPage() {
                         <input className="bg-neutral-950 border border-neutral-700 rounded p-1.5 text-sm w-full font-semibold" value={editDraft.name || ''} onChange={(e) => setEditDraft({ ...editDraft, name: e.target.value })} />
                         <div className="grid grid-cols-2 gap-2">
                           <input className="bg-neutral-950 border border-neutral-700 rounded p-1.5 text-xs" placeholder="Contact person" value={editDraft.contact_person || ''} onChange={(e) => setEditDraft({ ...editDraft, contact_person: e.target.value })} />
-                          <input className="bg-neutral-950 border border-neutral-700 rounded p-1.5 text-xs" placeholder="Phone" value={editDraft.phone || ''} onChange={(e) => setEditDraft({ ...editDraft, phone: e.target.value })} />
+                          <input type="tel" inputMode="numeric" maxLength={10} className="bg-neutral-950 border border-neutral-700 rounded p-1.5 text-xs" placeholder="10-digit phone" value={editDraft.phone || ''} onChange={(e) => setEditDraft({ ...editDraft, phone: e.target.value.replace(/\D/g, '').slice(0, 10) })} />
                           <input className="bg-neutral-950 border border-neutral-700 rounded p-1.5 text-xs" placeholder="Email" value={editDraft.email || ''} onChange={(e) => setEditDraft({ ...editDraft, email: e.target.value })} />
                           <input className="bg-neutral-950 border border-neutral-700 rounded p-1.5 text-xs" placeholder="Address" value={editDraft.address || ''} onChange={(e) => setEditDraft({ ...editDraft, address: e.target.value })} />
                         </div>

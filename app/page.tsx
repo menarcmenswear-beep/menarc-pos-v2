@@ -30,7 +30,6 @@ export default function POS() {
   const [inventory, setInventory] = useState<any[]>([]);
   const [staff, setStaff] = useState<any[]>([]);
   const [staffId, setStaffId] = useState<string>('');
-  const [showCustomerFields, setShowCustomerFields] = useState(false);
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
   const [customerEmail, setCustomerEmail] = useState('');
@@ -129,6 +128,12 @@ export default function POS() {
 
   async function completeSale() {
     if (cart.length === 0) return;
+
+    if (!customerName.trim() || !customerPhone.trim()) {
+      notify('Customer name and phone number are required to complete a sale.', 'error');
+      return;
+    }
+
     setProcessing(true);
 
     const items = cart.map(item => ({
@@ -292,31 +297,26 @@ export default function POS() {
 
               {cart.length > 0 && (
                 <div className="pt-4 border-t border-neutral-800 mt-4">
-                  <button
-                    onClick={() => setShowCustomerFields(!showCustomerFields)}
-                    className="flex items-center gap-1.5 text-xs text-neutral-400 hover:text-white mb-3"
-                  >
-                    <UserRound size={12} /> {showCustomerFields ? 'Hide' : 'Add'} customer details (optional)
-                  </button>
-                  {showCustomerFields && (
-                    <div className="grid grid-cols-2 gap-2 mb-4">
-                      <input
-                        type="text" placeholder="Customer name"
-                        className="col-span-2 bg-neutral-950 border border-neutral-700 rounded p-2 text-xs text-white focus:outline-none focus:border-white"
-                        value={customerName} onChange={(e) => setCustomerName(e.target.value)}
-                      />
-                      <input
-                        type="tel" placeholder="Phone number"
-                        className="bg-neutral-950 border border-neutral-700 rounded p-2 text-xs text-white focus:outline-none focus:border-white"
-                        value={customerPhone} onChange={(e) => setCustomerPhone(e.target.value)}
-                      />
-                      <input
-                        type="email" placeholder="Email (optional)"
-                        className="bg-neutral-950 border border-neutral-700 rounded p-2 text-xs text-white focus:outline-none focus:border-white"
-                        value={customerEmail} onChange={(e) => setCustomerEmail(e.target.value)}
-                      />
-                    </div>
-                  )}
+                  <p className="flex items-center gap-1.5 text-xs text-neutral-400 mb-2">
+                    <UserRound size={12} /> Customer details (required)
+                  </p>
+                  <div className="grid grid-cols-2 gap-2 mb-4">
+                    <input
+                      type="text" placeholder="Customer name *" required
+                      className="col-span-2 bg-neutral-950 border border-neutral-700 rounded p-2 text-xs text-white focus:outline-none focus:border-white"
+                      value={customerName} onChange={(e) => setCustomerName(e.target.value)}
+                    />
+                    <input
+                      type="tel" placeholder="Phone number *" required
+                      className="bg-neutral-950 border border-neutral-700 rounded p-2 text-xs text-white focus:outline-none focus:border-white"
+                      value={customerPhone} onChange={(e) => setCustomerPhone(e.target.value)}
+                    />
+                    <input
+                      type="email" placeholder="Email (optional)"
+                      className="bg-neutral-950 border border-neutral-700 rounded p-2 text-xs text-white focus:outline-none focus:border-white"
+                      value={customerEmail} onChange={(e) => setCustomerEmail(e.target.value)}
+                    />
+                  </div>
                   <div className="flex justify-between items-center text-lg font-bold mb-4">
                     <span>Total</span>
                     <span className="font-mono text-white">₹{cartTotal}</span>

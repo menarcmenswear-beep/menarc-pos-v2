@@ -1,7 +1,7 @@
 'use client';
 import { useState, useEffect, useRef } from 'react';
 import { createClient } from '@/lib/supabase/client';
-import { ScanLine, ShoppingCart, Trash2, Plus, Minus, RefreshCw, CheckCircle2, XCircle, Loader2, Package, User, UserRound } from 'lucide-react';
+import { ScanLine, ShoppingCart, Trash2, Plus, Minus, RefreshCw, CheckCircle2, XCircle, Loader2, Package, User, UserRound, Printer, Percent } from 'lucide-react';
 import { Nav } from '@/components/nav';
 
 const supabase = createClient();
@@ -36,6 +36,7 @@ export default function POS() {
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState(false);
   const [toast, setToast] = useState<Toast>(null);
+  const [receipt, setReceipt] = useState<any | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -103,6 +104,17 @@ export default function POS() {
     inputRef.current?.focus();
   }
 
+  function updateCartDiscount(index: number, value: string) {
+    const item = cart[index];
+    const lineValue = item.price * item.checkoutQty;
+    let discount = parseFloat(value) || 0;
+    if (discount < 0) discount = 0;
+    if (discount > lineValue) discount = lineValue;
+    const updated = [...cart];
+    updated[index] = { ...updated[index], discount };
+    setCart(updated);
+  }
+
   function updateCartQty(index: number, delta: number) {
     const item = cart[index];
     const stockItem = inventory.find(i => i.sku === item.sku);
@@ -118,7 +130,9 @@ export default function POS() {
       return;
     }
     const updated = [...cart];
-    updated[index] = { ...updated[index], checkoutQty: newQty };
+    const newLineValue = item.price * newQty;
+    const clampedDiscount = Math.min(item.discount, newLineValue);
+    updated[index] = { ...updated[index], checkoutQty: newQty, discount: clampedDiscount };
     setCart(updated);
   }
 
@@ -143,7 +157,7 @@ export default function POS() {
       discount: item.discount,
     }));
 
-    const { error } = await supabase.rpc('record_sale', {
+    const { data: saleId, error } = await supabase.rpc('record_sale', {
       p_items: items,
       p_offline_ref: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : null,
       p_staff_id: staffId || null,
@@ -158,6 +172,26 @@ export default function POS() {
       return;
     }
 
+    const cashier = staff.find(s => s.id === staffId);
+    setReceipt({
+      id: saleId,
+      date: new Date(),
+      cashierName: cashier?.full_name || null,
+      customerName: customerName.trim(),
+      customerPhone: customerPhone.trim(),
+      customerEmail: customerEmail.trim(),
+      items: cart.map(i => ({
+        sku: i.sku,
+        qty: i.checkoutQty,
+        rate: i.price,
+        discount: i.discount,
+        lineTotal: i.price * i.checkoutQty - i.discount,
+      })),
+      subtotal: cartSubtotal,
+      discountTotal: cartDiscountTotal,
+      total: cartTotal,
+    });
+
     playTone(1046, 140);
     notify('Sale completed successfully.', 'success');
     setCart([]);
@@ -168,7 +202,9 @@ export default function POS() {
     fetchInventory();
   }
 
-  const cartTotal = cart.reduce((acc, item) => acc + (item.price * item.checkoutQty) - item.discount, 0);
+  const cartSubtotal = cart.reduce((acc, item) => acc + (item.price * item.checkoutQty), 0);
+  const cartDiscountTotal = cart.reduce((acc, item) => acc + item.discount, 0);
+  const cartTotal = cartSubtotal - cartDiscountTotal;
   const cartItemCount = cart.reduce((acc, item) => acc + item.checkoutQty, 0);
 
   return (
@@ -273,24 +309,42 @@ export default function POS() {
                 {cart.length === 0 ? (
                   <p className="text-sm text-neutral-500 py-12 text-center">Cart is empty. Scan a barcode or type SKU to begin sale.</p>
                 ) : (
-                  <div className="divide-y divide-neutral-800 max-h-[220px] overflow-y-auto pr-2">
-                    {cart.map((item, index) => (
-                      <div key={index} className="py-2.5 flex justify-between items-center text-sm">
-                        <div>
-                          <p className="font-medium text-white">{item.sku}</p>
-                          <p className="text-xs text-neutral-400">₹{item.price} each</p>
-                        </div>
-                        <div className="flex items-center gap-3">
-                          <div className="flex items-center gap-1.5 bg-neutral-800 rounded px-1.5 py-1">
-                            <button onClick={() => updateCartQty(index, -1)} className="p-0.5 hover:text-white text-neutral-400"><Minus size={12} /></button>
-                            <span className="w-5 text-center font-mono text-xs">{item.checkoutQty}</span>
-                            <button onClick={() => updateCartQty(index, 1)} className="p-0.5 hover:text-white text-neutral-400"><Plus size={12} /></button>
+                  <div className="divide-y divide-neutral-800 max-h-[280px] overflow-y-auto pr-2">
+                    {cart.map((item, index) => {
+                      const lineGross = item.price * item.checkoutQty;
+                      const lineNet = lineGross - item.discount;
+                      return (
+                        <div key={index} className="py-2.5 text-sm">
+                          <div className="flex justify-between items-center">
+                            <div>
+                              <p className="font-medium text-white">{item.sku}</p>
+                              <p className="text-xs text-neutral-400">₹{item.price} each</p>
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <div className="flex items-center gap-1.5 bg-neutral-800 rounded px-1.5 py-1">
+                                <button onClick={() => updateCartQty(index, -1)} className="p-0.5 hover:text-white text-neutral-400"><Minus size={12} /></button>
+                                <span className="w-5 text-center font-mono text-xs">{item.checkoutQty}</span>
+                                <button onClick={() => updateCartQty(index, 1)} className="p-0.5 hover:text-white text-neutral-400"><Plus size={12} /></button>
+                              </div>
+                              <span className="font-mono text-neutral-200 w-16 text-right">
+                                {item.discount > 0 && <span className="line-through text-neutral-600 text-[10px] block">₹{lineGross}</span>}
+                                ₹{lineNet}
+                              </span>
+                              <button onClick={() => removeFromCart(index)} className="text-neutral-600 hover:text-red-400" aria-label="Remove item"><Trash2 size={14} /></button>
+                            </div>
                           </div>
-                          <span className="font-mono text-neutral-200 w-16 text-right">₹{item.price * item.checkoutQty}</span>
-                          <button onClick={() => removeFromCart(index)} className="text-neutral-600 hover:text-red-400" aria-label="Remove item"><Trash2 size={14} /></button>
+                          <div className="flex items-center gap-1.5 mt-1.5 pl-0.5">
+                            <Percent size={11} className="text-neutral-600" />
+                            <input
+                              type="number" min="0" max={lineGross} placeholder="Discount ₹"
+                              className="bg-neutral-950 border border-neutral-800 rounded px-2 py-1 text-[11px] text-neutral-300 w-24 focus:outline-none focus:border-neutral-600"
+                              value={item.discount || ''}
+                              onChange={(e) => updateCartDiscount(index, e.target.value)}
+                            />
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -317,7 +371,13 @@ export default function POS() {
                       value={customerEmail} onChange={(e) => setCustomerEmail(e.target.value)}
                     />
                   </div>
-                  <div className="flex justify-between items-center text-lg font-bold mb-4">
+                  <div className="space-y-1 mb-3 text-xs text-neutral-400">
+                    <div className="flex justify-between"><span>Subtotal</span><span className="font-mono">₹{cartSubtotal}</span></div>
+                    {cartDiscountTotal > 0 && (
+                      <div className="flex justify-between text-amber-400"><span>Discount</span><span className="font-mono">-₹{cartDiscountTotal}</span></div>
+                    )}
+                  </div>
+                  <div className="flex justify-between items-center text-lg font-bold mb-4 pt-2 border-t border-neutral-800">
                     <span>Total</span>
                     <span className="font-mono text-white">₹{cartTotal}</span>
                   </div>
@@ -344,6 +404,62 @@ export default function POS() {
           {toast.type === 'error' && <XCircle size={16} />}
           {toast.msg}
         </div>
+      )}
+
+      {receipt && (
+        <>
+          <style>{`
+            @media print {
+              body * { visibility: hidden; }
+              #receipt-print, #receipt-print * { visibility: visible; }
+              #receipt-print { position: fixed; top: 0; left: 0; width: 100%; }
+              .no-print { display: none !important; }
+            }
+          `}</style>
+          <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+            <div id="receipt-print" className="bg-white text-black w-full max-w-xs rounded-lg p-6 font-mono text-xs max-h-[85vh] overflow-y-auto">
+              <div className="text-center mb-3">
+                <p className="font-black text-base tracking-widest">MENARC</p>
+                <p className="text-[10px] text-neutral-600">Sale Receipt</p>
+              </div>
+              <div className="border-t border-dashed border-neutral-400 my-2" />
+              <p>Date: {receipt.date.toLocaleString()}</p>
+              <p>Receipt #: {receipt.id ? String(receipt.id).slice(0, 8) : '—'}</p>
+              {receipt.cashierName && <p>Cashier: {receipt.cashierName}</p>}
+              <div className="border-t border-dashed border-neutral-400 my-2" />
+              <p>Customer: {receipt.customerName}</p>
+              <p>Phone: {receipt.customerPhone}</p>
+              {receipt.customerEmail && <p>Email: {receipt.customerEmail}</p>}
+              <div className="border-t border-dashed border-neutral-400 my-2" />
+              {receipt.items.map((it: any, i: number) => (
+                <div key={i} className="mb-1.5">
+                  <div className="flex justify-between font-semibold"><span>{it.sku}</span><span>₹{it.lineTotal.toFixed(2)}</span></div>
+                  <div className="text-[10px] text-neutral-600">
+                    {it.qty} × ₹{it.rate}{it.discount > 0 ? ` − ₹${it.discount} disc.` : ''}
+                  </div>
+                </div>
+              ))}
+              <div className="border-t border-dashed border-neutral-400 my-2" />
+              <div className="flex justify-between"><span>Subtotal</span><span>₹{receipt.subtotal.toFixed(2)}</span></div>
+              {receipt.discountTotal > 0 && (
+                <div className="flex justify-between"><span>Discount</span><span>−₹{receipt.discountTotal.toFixed(2)}</span></div>
+              )}
+              <div className="flex justify-between font-bold text-sm mt-1 pt-1 border-t border-neutral-300">
+                <span>Total</span><span>₹{receipt.total.toFixed(2)}</span>
+              </div>
+              <div className="border-t border-dashed border-neutral-400 my-3" />
+              <p className="text-center text-[10px] text-neutral-600">Thank you for shopping with us!</p>
+            </div>
+          </div>
+          <div className="no-print fixed bottom-6 left-1/2 -translate-x-1/2 flex gap-2 z-[60]">
+            <button onClick={() => window.print()} className="flex items-center gap-2 bg-white text-black font-bold px-5 py-2.5 rounded-lg text-sm shadow-xl hover:bg-neutral-200 transition">
+              <Printer size={14} /> Print / Save PDF
+            </button>
+            <button onClick={() => setReceipt(null)} className="bg-neutral-800 text-white px-5 py-2.5 rounded-lg text-sm shadow-xl hover:bg-neutral-700 transition">
+              New Sale
+            </button>
+          </div>
+        </>
       )}
     </div>
   );

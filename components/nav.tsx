@@ -1,6 +1,8 @@
 'use client';
 import Link from 'next/link';
 import { LogoutButton } from '@/components/logout-button';
+import { useStaffRole } from '@/lib/hooks/use-staff-role';
+import { ShieldCheck, User } from 'lucide-react';
 
 const LINKS = [
   { href: '/', label: 'POS Checkout' },
@@ -12,6 +14,8 @@ const LINKS = [
 ];
 
 export function Nav({ current, showLogout = false }: { current: string; showLogout?: boolean }) {
+  const { role, loading } = useStaffRole();
+
   return (
     <div className="flex items-center gap-2 flex-wrap">
       <nav className="flex items-center gap-1.5 flex-wrap">
@@ -29,6 +33,13 @@ export function Nav({ current, showLogout = false }: { current: string; showLogo
           </Link>
         ))}
       </nav>
+      {showLogout && !loading && role && (
+        <span className={`flex items-center gap-1 text-[10px] px-2 py-1 rounded border ${
+          role === 'admin' ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' : 'text-neutral-400 border-neutral-800 bg-neutral-900'
+        }`}>
+          {role === 'admin' ? <ShieldCheck size={11} /> : <User size={11} />} {role}
+        </span>
+      )}
       {showLogout && <LogoutButton />}
     </div>
   );

@@ -26,8 +26,15 @@ export default function Dashboard() {
 
     // 1. Sale headers in range
     let salesQuery = supabase.from('sales').select('*').order('created_at', { ascending: false });
-    if (startDate) salesQuery = salesQuery.gte('created_at', `${startDate}T00:00:00`);
-    if (endDate) salesQuery = salesQuery.lte('created_at', `${endDate}T23:59:59`);
+    // startDate/endDate are plain local calendar days (e.g. "2026-09-12") from the
+    // date inputs. Appending "T00:00:00" with no timezone gets read as UTC by
+    // Postgres, which is ~5.5h off from IST — shifting the whole filtered window.
+    // Building real Date objects first lets toISOString() convert correctly.
+    const startOfDay = startDate ? new Date(`${startDate}T00:00:00`).toISOString() : null;
+    const endOfDay = endDate ? new Date(`${endDate}T23:59:59.999`).toISOString() : null;
+
+    if (startOfDay) salesQuery = salesQuery.gte('created_at', startOfDay);
+    if (endOfDay) salesQuery = salesQuery.lte('created_at', endOfDay);
     const { data: salesData, error: salesError } = await salesQuery;
 
     if (salesError) {
@@ -58,8 +65,8 @@ export default function Dashboard() {
       .from('returns')
       .select('*, sale_items(sku, qty, final_value, cost_price)')
       .order('created_at', { ascending: false });
-    if (startDate) returnsQuery = returnsQuery.gte('created_at', `${startDate}T00:00:00`);
-    if (endDate) returnsQuery = returnsQuery.lte('created_at', `${endDate}T23:59:59`);
+    if (startOfDay) returnsQuery = returnsQuery.gte('created_at', startOfDay);
+    if (endOfDay) returnsQuery = returnsQuery.lte('created_at', endOfDay);
     const { data: returnsData, error: returnsError } = await returnsQuery;
 
     if (returnsError) {

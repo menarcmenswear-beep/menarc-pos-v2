@@ -250,9 +250,9 @@ export default function Dashboard() {
             {dailyRevenue.length === 0 ? (
               <p className="text-sm text-neutral-500 py-8 text-center">No revenue data for this range yet.</p>
             ) : (
-              <div className="flex items-end gap-1.5 h-40">
+              <div className="flex items-end gap-2 h-40 overflow-x-auto">
                 {dailyRevenue.map(([day, value]) => (
-                  <div key={day} className="flex-1 flex flex-col items-center justify-end h-full group relative">
+                  <div key={day} className="w-10 shrink-0 flex flex-col items-center justify-end h-full group relative">
                     <div className="text-[10px] text-neutral-400 mb-1 opacity-0 group-hover:opacity-100 transition font-mono absolute -top-4 whitespace-nowrap">₹{value.toLocaleString('en-IN')}</div>
                     <div
                       className={`w-full rounded-t transition ${value < 0 ? 'bg-amber-500/70 group-hover:bg-amber-400' : 'bg-white/80 group-hover:bg-white'}`}

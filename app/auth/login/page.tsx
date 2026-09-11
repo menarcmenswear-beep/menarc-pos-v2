@@ -37,8 +37,10 @@ function LoginForm() {
     <div className="min-h-screen bg-neutral-950 text-white flex items-center justify-center p-6">
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
-          <h1 className="text-2xl font-black tracking-widest">MENARC</h1>
-          <p className="text-xs text-neutral-400 mt-1">Staff Login</p>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/menarc-logo.jpg" alt="MENARC" className="h-20 w-auto mx-auto rounded-lg mb-3" />
+          <p className="text-xs italic text-neutral-400">Never go unnoticed</p>
+          <p className="text-xs text-neutral-500 mt-2">Staff Login</p>
         </div>
 
         {configError && (
